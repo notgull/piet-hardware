@@ -119,7 +119,7 @@ impl<H: HasContext + ?Sized> Brushes<H> {
     /// Run a closure with the current program set to that of a specific brush.
     ///
     /// This function takes care of uniforms.
-    fn with_brush<R>(
+    pub(super) fn with_brush<R>(
         &mut self,
         context: &Rc<H>,
         version: GlVersion,
@@ -163,6 +163,18 @@ impl<H: HasContext + ?Sized> Brushes<H> {
                 mask.texture.bind(Some(0), |bound| unsafe {
                     bound.register_in_uniform(&texture_mask_uniform);
                 });
+            }
+
+            // Set the solid color.
+            if let (Some(solid_color_uniform), BrushInner::Solid(color)) =
+                (solid_color_uniform, &brush.0)
+            {
+                let (r, g, b, a) = color.as_rgba();
+                let color = [r as f32, g as f32, b as f32, a as f32];
+
+                unsafe {
+                    uniform_vec4(&**context, &solid_color_uniform, &color);
+                }
             }
 
             // Call the function.
