@@ -3,7 +3,7 @@
 use crate::Error;
 use glow::HasContext;
 
-use std::collections::hash_map::{HashMap, Entry};
+use std::collections::hash_map::{Entry, HashMap};
 use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -22,9 +22,7 @@ pub(super) struct Program<H: HasContext + ?Sized> {
 
 impl<H: HasContext + ?Sized> fmt::Debug for Program<H> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_tuple("Program")
-            .field(&self.id)
-            .finish()
+        f.debug_tuple("Program").field(&self.id).finish()
     }
 }
 
@@ -46,13 +44,10 @@ impl<H: HasContext + ?Sized> Program<H> {
 
         unsafe {
             // Create the program.
-            let id = vertex
-                .context
-                .create_program()
-                .map_err(|e| {
-                    let err = format!("Failed to create program: {e}");
-                    Error::BackendError(err.into())
-                })?;
+            let id = vertex.context.create_program().map_err(|e| {
+                let err = format!("Failed to create program: {e}");
+                Error::BackendError(err.into())
+            })?;
 
             // Attach the shaders.
             vertex.context.attach_shader(id, vertex.id);
@@ -66,7 +61,7 @@ impl<H: HasContext + ?Sized> Program<H> {
                 Ok(Self {
                     context: vertex.context.clone(),
                     id,
-                    uniforms: HashMap::new()
+                    uniforms: HashMap::new(),
                 })
             } else {
                 let err = vertex.context.get_program_info_log(id);
@@ -98,7 +93,7 @@ impl<H: HasContext + ?Sized> Program<H> {
     }
 
     /// Use the program.
-    /// 
+    ///
     /// Note: Do NOT call this function reentrantly.
     pub(super) fn with_program<R>(&self, f: impl FnOnce() -> R) -> R {
         unsafe {
@@ -110,7 +105,7 @@ impl<H: HasContext + ?Sized> Program<H> {
 
             f()
         }
-    } 
+    }
 }
 
 /// A shader.
@@ -135,10 +130,7 @@ impl<H: HasContext + ?Sized, Ty> Drop for Shader<H, Ty> {
 
 impl<H: HasContext + ?Sized, Ty: ShaderType> Shader<H, Ty> {
     /// Create a new shader from the given source.
-    pub(super) fn new(
-        context: &Rc<H>,
-        source: &str,
-    ) -> Result<Self, Error> {
+    pub(super) fn new(context: &Rc<H>, source: &str) -> Result<Self, Error> {
         unsafe {
             // Create the shader.
             let id = context.create_shader(Ty::TYPE).map_err(|e| {
@@ -188,12 +180,10 @@ impl<H: HasContext + ?Sized> Framebuffer<H> {
     /// Create a new framebuffer.
     pub fn new(context: &Rc<H>) -> Result<Self, Error> {
         unsafe {
-            let id = context
-                .create_framebuffer()
-                .map_err(|e| {
-                    let err = format!("Failed to create framebuffer: {e}");
-                    Error::BackendError(err.into())
-                })?;
+            let id = context.create_framebuffer().map_err(|e| {
+                let err = format!("Failed to create framebuffer: {e}");
+                Error::BackendError(err.into())
+            })?;
 
             Ok(Self {
                 context: context.clone(),
@@ -214,9 +204,7 @@ pub(super) struct Texture<H: HasContext + ?Sized> {
 
 impl<H: HasContext + ?Sized> fmt::Debug for Texture<H> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_tuple("Texture")
-            .field(&self.id)
-            .finish()
+        f.debug_tuple("Texture").field(&self.id).finish()
     }
 }
 
@@ -232,12 +220,10 @@ impl<H: HasContext + ?Sized> Texture<H> {
     /// Create a new texture.
     pub(super) fn new(context: &Rc<H>) -> Result<Self, Error> {
         unsafe {
-            let id = context
-                .create_texture()
-                .map_err(|e| {
-                    let err = format!("Failed to create texture: {e}");
-                    Error::BackendError(err.into())
-                })?;
+            let id = context.create_texture().map_err(|e| {
+                let err = format!("Failed to create texture: {e}");
+                Error::BackendError(err.into())
+            })?;
 
             Ok(Self {
                 context: context.clone(),
@@ -245,12 +231,67 @@ impl<H: HasContext + ?Sized> Texture<H> {
             })
         }
     }
+
+    /// Run with this texture bound to the `GL_TEXTURE_2D` unit ID.
+    ///
+    /// `active` should be `Some` to also bind this to `GL_TEXTURE0 + active`.
+    pub(super) fn bind<R>(
+        &self,
+        active: Option<u32>,
+        f: impl FnOnce(&mut BoundTexture<'_, H>) -> R,
+    ) -> R {
+        // If possible, set the active texture.
+        if let Some(active) = active {
+            unsafe {
+                self.context.active_texture(glow::TEXTURE0 + active);
+            }
+        }
+
+        // Bind to the GL texture slot.
+        unsafe {
+            self.context.bind_texture(glow::TEXTURE_2D, Some(self.id));
+        }
+
+        // Unbind after the scope is over.
+        let _guard = CallOnDrop(|| unsafe {
+            self.context.bind_texture(glow::TEXTURE_2D, None);
+        });
+
+        // Run the function.
+        f(&mut BoundTexture {
+            context: &self.context,
+            active,
+        })
+    }
+}
+
+/// An object representing a currently bound texture.
+pub(super) struct BoundTexture<'a, H: HasContext + ?Sized> {
+    context: &'a H,
+
+    /// If we are bound to an active texture, we're bound here.
+    active: Option<u32>,
+}
+
+impl<H: HasContext + ?Sized> BoundTexture<'_, H> {
+    /// Register this bound texture to a uniform.
+    ///
+    /// # Safety
+    ///
+    /// The target uniform must be a `sampler2D`.
+    pub(super) unsafe fn register_in_uniform(&self, uniform: &H::UniformLocation) {
+        self.context.uniform_1_u32(
+            Some(uniform),
+            self.active
+                .expect("Called register_in_uniform for inactive texture"),
+        )
+    }
 }
 
 /// The type of a shader.
-/// 
+///
 /// # Safety
-/// 
+///
 /// `TYPE` must be a valid shader type.
 pub(super) unsafe trait ShaderType {
     /// The shader type.
@@ -278,4 +319,3 @@ impl<F: FnMut()> Drop for CallOnDrop<F> {
         (self.0)();
     }
 }
-

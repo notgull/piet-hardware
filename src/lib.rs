@@ -21,11 +21,11 @@ mod resources;
 use glow::HasContext;
 use tinyvec::TinyVec;
 
-use piet::kurbo::{Affine, Point, Rect, Shape, Size, PathEl, BezPath};
+use piet::kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape, Size};
 use piet::{
-    Error, FixedGradient, FontFamily, HitTestPoint, HitTestPosition, ImageFormat,
-    InterpolationMode, IntoBrush, LineMetric, StrokeStyle, TextAlignment, TextAttribute,
-    FixedLinearGradient, FixedRadialGradient
+    Error, FixedGradient, FixedLinearGradient, FixedRadialGradient, FontFamily, HitTestPoint,
+    HitTestPosition, ImageFormat, InterpolationMode, IntoBrush, LineMetric, StrokeStyle,
+    TextAlignment, TextAttribute,
 };
 
 use std::borrow::Cow;
@@ -192,11 +192,11 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
 
             let rect = match region {
                 Some(region) => region,
-                None => todo!()
+                None => todo!(),
             };
 
             self.fill(rect, &brush);
-        } 
+        }
 
         let (r, g, b, a) = color.as_rgba();
 
@@ -210,12 +210,7 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
     }
 
     fn stroke(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>, width: f64) {
-        self.stroke_styled(
-            shape,
-            brush,
-            width,
-            &Default::default()
-        );
+        self.stroke_styled(shape, brush, width, &Default::default());
     }
 
     fn stroke_styled(
