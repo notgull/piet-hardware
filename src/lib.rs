@@ -29,17 +29,13 @@ use lyon_tessellation::{
     StrokeOptions, StrokeTessellator, StrokeVertex, VertexBuffers,
 };
 
-use piet::kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape, Size};
+use piet::kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape, Size, Vec2};
 use piet::{
-    Error, FixedGradient, FixedLinearGradient, FixedRadialGradient, FontFamily, HitTestPoint,
-    HitTestPosition, ImageFormat, InterpolationMode, IntoBrush, LineCap as PietLineCap,
-    LineJoin as PietLineJoin, LineMetric, StrokeStyle, TextAlignment, TextAttribute,
+    Error, FixedGradient, FontFamily, HitTestPoint, HitTestPosition, ImageFormat,
+    InterpolationMode, IntoBrush, LineCap as PietLineCap, LineMetric, StrokeStyle, TextAlignment,
+    TextAttribute,
 };
 
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::fmt;
-use std::marker::PhantomData;
 use std::mem;
 use std::ops::RangeBounds;
 use std::rc::Rc;
@@ -75,6 +71,15 @@ pub struct GlContext<H: HasContext + ?Sized> {
 
     /// Buffer for vertices.
     vertex_buffer: VertexBuffers<Point2D<f32>, u32>,
+
+    /// The VAO for the vertex buffer.
+    vao: resources::VertexArray<H>,
+
+    /// The VBO for the vertex buffer.
+    vbo: resources::VertexBuffer<H>,
+
+    /// The VBO for the index buffer.
+    ibo: resources::VertexBuffer<H>,
 }
 
 impl<H: HasContext + ?Sized> GlContext<H> {
@@ -87,26 +92,29 @@ impl<H: HasContext + ?Sized> GlContext<H> {
     /// it should be acquired again.
     ///
     /// [`HasContext`]: https://docs.rs/glow/latest/glow/trait.HasContext.html
-    pub unsafe fn new(context: H) -> Self
+    pub unsafe fn new(context: H) -> Result<Self, Error>
     where
         H: Sized,
     {
         Self::from_rc(Rc::new(context))
     }
 
-    unsafe fn from_rc(context: Rc<H>) -> Self {
-        Self {
+    unsafe fn from_rc(context: Rc<H>) -> Result<Self, Error> {
+        Ok(Self {
             version: if context.version().is_embedded {
                 GlVersion::Es30
             } else {
                 GlVersion::Gl32
             },
+            vao: resources::VertexArray::new(&context)?,
+            vbo: resources::VertexBuffer::new(&context)?,
+            ibo: resources::VertexBuffer::new(&context)?,
             context,
             shader_cache: brush::Brushes::new(),
             fill_tesselator: FillTessellator::new(),
             stroke_tesselator: StrokeTessellator::new(),
             vertex_buffer: VertexBuffers::new(),
-        }
+        })
     }
 
     /// Get a reference to the underlying context.
@@ -171,8 +179,12 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
         // The transform needs to transform from the coordinate space to the framebuffer.
         // The framebuffer is (0, 0) at the top left, and (width, height) at the bottom right.
         // GL goes from (-1, -1) to (1, 1)
-        let default_transform = Affine::scale_non_uniform(2.0 / width as f64, 2.0 / height as f64)
-            * Affine::translate((-1.0, 1.0));
+        let default_transform = Affine::translate(Vec2::new(-1.0, -1.0))
+            * Affine::scale_non_uniform(2.0 / width as f64, 2.0 / height as f64);
+
+        unsafe {
+            gl.context.viewport(0, 0, width as i32, height as i32);
+        }
 
         Self {
             text: Text {
@@ -210,6 +222,9 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
         options.fill_rule = fill_rule;
         options.tolerance = self.tolerance as f32;
 
+        self.gl.vertex_buffer.vertices.clear();
+        self.gl.vertex_buffer.indices.clear();
+
         // Tessellate the path.
         if let Err(e) = self.gl.fill_tesselator.tessellate(
             path_events,
@@ -232,7 +247,23 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
             &self.state.last().unwrap().transform,
             None, //todo
             || {
-                todo!();
+                // Bind the VAO and VBO.
+                let mut vao = self.gl.vao.bind();
+                let mut vbo = self.gl.vbo.bind(resources::BufferTarget::Array);
+                let mut ibo = self.gl.ibo.bind(resources::BufferTarget::ElementArray);
+
+                // Upload the vertex data.
+                vbo.upload_f32(bytemuck::cast_slice(&self.gl.vertex_buffer.vertices));
+                ibo.upload_u32(&self.gl.vertex_buffer.indices);
+                vao.attribute_ptr(&vbo);
+
+                drop(vbo);
+
+                // Draw the triangles.
+                unsafe {
+                    vao.draw_triangles(self.gl.vertex_buffer.indices.len());
+                }
+
                 Ok(())
             },
         );
@@ -326,6 +357,9 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
         options.line_width = width as f32;
         options.start_cap = cvt_cap(style.line_cap);
         options.end_cap = cvt_cap(style.line_cap);
+
+        self.gl.vertex_buffer.vertices.clear();
+        self.gl.vertex_buffer.indices.clear();
 
         // Tessellate the path.
         if let Err(e) = self.gl.stroke_tesselator.tessellate(

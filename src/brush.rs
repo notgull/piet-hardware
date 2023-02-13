@@ -3,7 +3,7 @@
 #![allow(clippy::wrong_self_convention)]
 
 use crate::resources::{Fragment, Program, Shader, Texture, Vertex};
-use crate::{Error, GlContext, GlVersion, RenderContext};
+use crate::{Error, GlVersion, RenderContext};
 
 use glow::HasContext;
 use piet::kurbo::{Affine, Rect};
@@ -14,7 +14,6 @@ use std::collections::hash_map::{Entry, HashMap};
 use std::fmt::Write;
 use std::mem;
 use std::rc::Rc;
-use std::sync::Arc;
 
 // Various variable/function names used in GLSL.
 const IN_POSITION: &str = "position";
@@ -326,7 +325,10 @@ impl VertexBuilder {
         writeln!(source, "void main() {{").unwrap();
         writeln!(
             source,
-            "    gl_Position = vec4((mvp * vec3({IN_POSITION}, 1.0)).xy, 0.0, 1.0);"
+            "    
+                vec2 finalPosition = (mvp * vec3({IN_POSITION}, 1.0)).xy; 
+                gl_Position = vec4(finalPosition.x, -finalPosition.y, 0.0, 1.0);
+            "
         )
         .unwrap();
 
@@ -447,7 +449,7 @@ impl FragmentBuilder {
             self.source,
             "
             float {GET_MASK_ALPHA}() {{
-                return 1;
+                return 1.0;
             }}
         "
         )

@@ -58,6 +58,10 @@ impl<H: HasContext + ?Sized> Program<H> {
 
             // Check for errors.
             if vertex.context.get_program_link_status(id) {
+                // Detach the shaders.
+                vertex.context.detach_shader(id, vertex.id);
+                vertex.context.detach_shader(id, fragment.id);
+
                 Ok(Self {
                     context: vertex.context.clone(),
                     id,
@@ -265,6 +269,104 @@ impl<H: HasContext + ?Sized> Texture<H> {
     }
 }
 
+/// VAO.
+pub(super) struct VertexArray<H: HasContext + ?Sized> {
+    /// The OpenGL context.
+    context: Rc<H>,
+
+    /// The VAO ID.
+    id: H::VertexArray,
+}
+
+impl<H: HasContext + ?Sized> Drop for VertexArray<H> {
+    fn drop(&mut self) {
+        unsafe {
+            self.context.delete_vertex_array(self.id);
+        }
+    }
+}
+
+impl<H: HasContext + ?Sized> VertexArray<H> {
+    /// Create a new VAO.
+    pub(super) fn new(context: &Rc<H>) -> Result<Self, Error> {
+        unsafe {
+            let id = context.create_vertex_array().map_err(|e| {
+                let err = format!("Failed to create vertex array: {e}");
+                Error::BackendError(err.into())
+            })?;
+
+            Ok(Self {
+                context: context.clone(),
+                id,
+            })
+        }
+    }
+
+    /// Bind this buffer to the active VAO.
+    pub(super) fn bind(&self) -> BoundVertexArray<'_, H> {
+        unsafe {
+            self.context.bind_vertex_array(Some(self.id));
+        }
+
+        BoundVertexArray {
+            context: &self.context,
+        }
+    }
+}
+
+/// An object representing a vertex buffer.
+pub(super) struct VertexBuffer<H: HasContext + ?Sized> {
+    /// The OpenGL context.
+    context: Rc<H>,
+
+    /// The buffer ID.
+    id: H::Buffer,
+}
+
+impl<H: HasContext + ?Sized> Drop for VertexBuffer<H> {
+    fn drop(&mut self) {
+        unsafe {
+            self.context.delete_buffer(self.id);
+        }
+    }
+}
+
+impl<H: HasContext + ?Sized> VertexBuffer<H> {
+    /// Create a new vertex buffer.
+    pub(super) fn new(context: &Rc<H>) -> Result<Self, Error> {
+        unsafe {
+            let id = context.create_buffer().map_err(|e| {
+                let err = format!("Failed to create vertex buffer: {e}");
+                Error::BackendError(err.into())
+            })?;
+
+            Ok(Self {
+                context: context.clone(),
+                id,
+            })
+        }
+    }
+
+    /// Bind this buffer to the given target.
+    pub(super) fn bind(&self, target: BufferTarget) -> BoundVertexBuffer<'_, H> {
+        unsafe {
+            self.context.bind_buffer(target as u32, Some(self.id));
+        }
+
+        BoundVertexBuffer {
+            context: &self.context,
+            location: target,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+#[repr(u32)]
+pub(super) enum BufferTarget {
+    Array = glow::ARRAY_BUFFER,
+    ElementArray = glow::ELEMENT_ARRAY_BUFFER,
+}
+
 /// An object representing a currently bound texture.
 pub(super) struct BoundTexture<'a, H: HasContext + ?Sized> {
     context: &'a H,
@@ -285,6 +387,82 @@ impl<H: HasContext + ?Sized> BoundTexture<'_, H> {
             self.active
                 .expect("Called register_in_uniform for inactive texture"),
         )
+    }
+}
+
+/// An object representing a bound VAO.
+pub(super) struct BoundVertexArray<'a, H: HasContext + ?Sized> {
+    context: &'a H,
+}
+
+impl<'a, H: HasContext + ?Sized> Drop for BoundVertexArray<'a, H> {
+    fn drop(&mut self) {
+        unsafe {
+            self.context.bind_vertex_array(None);
+        }
+    }
+}
+
+impl<H: HasContext + ?Sized> BoundVertexArray<'_, H> {
+    /// Add an attribute pointer to the VAO.
+    pub(super) fn attribute_ptr(&mut self, _bound_buffer: &BoundVertexBuffer<'_, H>) {
+        unsafe {
+            self.context.vertex_attrib_pointer_f32(
+                0,
+                2,
+                glow::FLOAT,
+                false,
+                (2 * std::mem::size_of::<f32>()) as _,
+                0,
+            );
+            self.context.enable_vertex_attrib_array(0);
+        }
+    }
+
+    /// Draw triangles.
+    pub(super) unsafe fn draw_triangles(&mut self, count: usize) {
+        self.context
+            .draw_elements(glow::TRIANGLES, count as i32, glow::UNSIGNED_INT, 0)
+    }
+}
+
+/// An object representing a bound vertex buffer.
+pub(super) struct BoundVertexBuffer<'a, H: HasContext + ?Sized> {
+    context: &'a H,
+
+    /// The location at which the buffer is bound.
+    location: BufferTarget,
+}
+
+impl<H: HasContext + ?Sized> Drop for BoundVertexBuffer<'_, H> {
+    fn drop(&mut self) {
+        unsafe {
+            self.context.bind_buffer(self.location as u32, None);
+        }
+    }
+}
+
+impl<'a, H: HasContext + ?Sized> BoundVertexBuffer<'a, H> {
+    /// Upload floating point data to the buffer.
+    pub(super) fn upload_f32(&mut self, data: &[f32]) {
+        unsafe {
+            self.context.buffer_data_u8_slice(
+                self.location as u32,
+                bytemuck::cast_slice(data),
+                glow::DYNAMIC_DRAW,
+            );
+        }
+    }
+
+    /// Upload unsigned integer data to the buffer.
+    pub(super) fn upload_u32(&mut self, data: &[u32]) {
+        unsafe {
+            self.context.buffer_data_u8_slice(
+                self.location as u32,
+                bytemuck::cast_slice(data),
+                glow::DYNAMIC_DRAW,
+            );
+        }
     }
 }
 
