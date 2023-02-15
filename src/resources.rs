@@ -2,6 +2,7 @@
 
 use crate::Error;
 use glow::HasContext;
+use piet::kurbo::Affine;
 
 use std::collections::hash_map::{Entry, HashMap};
 use std::fmt;
@@ -99,15 +100,56 @@ impl<H: HasContext + ?Sized> Program<H> {
     /// Use the program.
     ///
     /// Note: Do NOT call this function reentrantly.
-    pub(super) fn with_program<R>(&self, f: impl FnOnce() -> R) -> R {
+    pub(super) fn bind(&self) -> BoundProgram<'_, H> {
         unsafe {
             self.context.use_program(Some(self.id));
 
-            let _guard = CallOnDrop(|| {
-                self.context.use_program(None);
-            });
+            BoundProgram(self.context.as_ref())
+        }
+    }
+}
 
-            f()
+/// A bound program.
+pub(super) struct BoundProgram<'a, H: HasContext + ?Sized>(&'a H);
+
+impl<H: HasContext + ?Sized> Drop for BoundProgram<'_, H> {
+    fn drop(&mut self) {
+        unsafe {
+            self.0.use_program(None);
+        }
+    }
+}
+
+impl<H: HasContext + ?Sized> BoundProgram<'_, H> {
+    /// Register an affine transformation at a `mat3` uniform.
+    pub(super) fn register_mat3(&self, location: &H::UniformLocation, transform: &Affine) {
+        let matrix = affine_to_gl_matrix(transform);
+
+        unsafe {
+            self.0
+                .uniform_matrix_3_f32_slice(Some(location), false, &matrix);
+        }
+    }
+
+    /// Register a four-component color at a `vec4` uniform.
+    pub(super) fn register_color(&self, location: &H::UniformLocation, color: piet::Color) {
+        let (r, g, b, a) = color.as_rgba();
+        let color = [r as f32, g as f32, b as f32, a as f32];
+
+        unsafe {
+            self.0.uniform_4_f32_slice(Some(location), &color);
+        }
+    }
+
+    /// Register a texture as a `sampler2D` uniform.
+    pub(super) fn register_texture(
+        &self,
+        location: &H::UniformLocation,
+        texture: &mut BoundTexture<'_, H>,
+    ) {
+        unsafe {
+            let active = texture.active.expect("Texture is not active");
+            self.0.uniform_1_u32(Some(location), active);
         }
     }
 }
@@ -574,6 +616,18 @@ pub(super) struct Fragment;
 
 unsafe impl ShaderType for Fragment {
     const TYPE: u32 = glow::FRAGMENT_SHADER;
+}
+
+/// Convert an `Affine` to an OpenGL matrix.
+fn affine_to_gl_matrix(aff: &Affine) -> [f32; 9] {
+    macro_rules! f {
+        ($e:expr) => {
+            ($e as f32)
+        };
+    }
+
+    let [a, b, c, d, e, f] = aff.as_coeffs();
+    [f!(a), f!(b), 0.0, f!(c), f!(d), 0.0, f!(e), f!(f), 1.0]
 }
 
 struct CallOnDrop<F: FnMut()>(F);

@@ -2,7 +2,7 @@
 
 #![allow(clippy::wrong_self_convention)]
 
-use crate::resources::{Fragment, Program, Shader, Texture, Vertex};
+use crate::resources::{BoundProgram, Fragment, Program, Shader, Texture, Vertex};
 use crate::{Error, GlVersion, RenderContext};
 
 use glow::HasContext;
@@ -108,6 +108,23 @@ struct ShaderKey {
     write_to_mask: bool,
 }
 
+pub(super) enum Target<'a> {
+    /// Draw to the surface, using the given brush.
+    Surface(&'a Brush),
+
+    /// Draw to a framebuffer, using the empty brush.
+    Framebuffer,
+}
+
+impl Target<'_> {
+    fn input_type(&self) -> InputType {
+        match self {
+            Target::Surface(brush) => brush.input_type(),
+            Target::Framebuffer => InputType::Empty,
+        }
+    }
+}
+
 /// A cache for brush-related shaders.
 #[derive(Debug)]
 pub(super) struct Brushes<H: HasContext + ?Sized> {
@@ -122,19 +139,21 @@ impl<H: HasContext + ?Sized> Brushes<H> {
         }
     }
 
-    /// Run a closure with the current program set to that of a specific brush.
+    /// Run a closure with the current program set to that of a specific target.
     ///
     /// This function takes care of uniforms.
-    pub(super) fn with_brush<R>(
+    pub(super) fn with_target(
         &mut self,
         context: &Rc<H>,
         version: GlVersion,
-        brush: &Brush,
+        brush: Target<'_>,
         mvp: &Affine,
         mask: Option<&Mask<'_, H>>,
-        f: impl FnOnce() -> Result<R, Error>,
-    ) -> Result<R, Error> {
-        let mut shader = self.shader_for_brush(context, version, brush, mask)?;
+    ) -> Result<BoundProgram<'_, H>, Error> {
+        let shader = match brush {
+            Target::Surface(brush) => self.shader_for_brush(context, version, brush, mask)?,
+            Target::Framebuffer => self.shader_for_empty(context, version, mask)?,
+        };
 
         // Get location for the uniforms we use.
         let mvp_uniform = shader.uniform_location(MVP)?.clone();
@@ -152,68 +171,28 @@ impl<H: HasContext + ?Sized> Brushes<H> {
             None
         };
 
-        shader.with_program(move || {
-            // Set the MVP.
-            unsafe {
-                uniform_affine(&**context, &mvp_uniform, mvp);
-            }
+        let program = shader.bind();
 
-            // Set the Mask values.
-            if let (Some(mask), Some((mask_mvp_uniform, texture_mask_uniform))) =
-                (mask, mask_uniforms)
-            {
-                unsafe {
-                    uniform_affine(&**context, &mask_mvp_uniform, mask.transform);
-                }
+        // Set the MVP.
+        program.register_mat3(&mvp_uniform, mvp);
 
-                let mut bound = mask.texture.bind(Some(0));
-                unsafe {
-                    bound.register_in_uniform(&texture_mask_uniform);
-                }
-            }
+        // Set the Mask values.
+        if let (Some(mask), Some((mask_mvp_uniform, texture_mask_uniform))) = (mask, mask_uniforms)
+        {
+            program.register_mat3(&mask_mvp_uniform, mask.transform);
 
-            // Set the solid color.
-            if let (Some(solid_color_uniform), BrushInner::Solid(color)) =
-                (solid_color_uniform, &brush.0)
-            {
-                let (r, g, b, a) = color.as_rgba();
-                let color = [r as f32, g as f32, b as f32, a as f32];
+            let mut bound = mask.texture.bind(Some(0));
+            program.register_texture(&texture_mask_uniform, &mut bound);
+        }
 
-                unsafe {
-                    uniform_vec4(&**context, &solid_color_uniform, &color);
-                }
-            }
+        // Set the solid color.
+        if let (Some(solid_color_uniform), Target::Surface(Brush(BrushInner::Solid(color)))) =
+            (solid_color_uniform, &brush)
+        {
+            program.register_color(&solid_color_uniform, *color);
+        }
 
-            // Call the function.
-            f()
-        })
-    }
-
-    /// Run a closure with the current program set to the empty program.
-    ///
-    /// This function takes care of uniforms.
-    fn with_empty<R>(
-        &mut self,
-        context: &Rc<H>,
-        version: GlVersion,
-        mvp: &Affine,
-        f: impl FnOnce() -> Result<R, Error>,
-    ) -> Result<R, Error> {
-        let mut shader = self.shader_for_empty(context, version)?;
-
-        // Get location for MVP uniform.
-        let mvp_uniform = shader.uniform_location(MVP)?.clone();
-
-        // Enter the program.
-        shader.with_program(move || {
-            // Set the MVP.
-            unsafe {
-                uniform_affine(&**context, &mvp_uniform, mvp);
-            }
-
-            // Run with the program.
-            f()
-        })
+        Ok(program)
     }
 
     fn shader_for_brush(
@@ -241,8 +220,19 @@ impl<H: HasContext + ?Sized> Brushes<H> {
         &mut self,
         context: &Rc<H>,
         version: GlVersion,
+        mask: Option<&Mask<'_, H>>,
     ) -> Result<&mut Program<H>, Error> {
-        self.fetch_or_create_shader(context, version, InputType::Empty, MaskType::NoMask, true)
+        self.fetch_or_create_shader(
+            context,
+            version,
+            InputType::Empty,
+            if mask.is_some() {
+                MaskType::Texture
+            } else {
+                MaskType::NoMask
+            },
+            true,
+        )
     }
 
     /// Fetch the shader program from the cache or create a new one.
@@ -402,7 +392,7 @@ impl FragmentBuilder {
     fn write_to_layout(&mut self) -> &mut Self {
         self.write_to_layout = true;
 
-        writeln!(self.source, "layout(location = 0) out vec3 {OUTPUT_COLOR};").ok();
+        writeln!(self.source, "layout(location = 0) out vec4 {OUTPUT_COLOR};").ok();
 
         self
     }
@@ -475,7 +465,8 @@ impl FragmentBuilder {
                 return color;
             }}
             "
-        ).ok();
+        )
+        .ok();
 
         todo!();
 
@@ -499,7 +490,7 @@ impl FragmentBuilder {
             uniform sampler2D {TEXTURE_MASK};
 
             float {GET_MASK_ALPHA}() {{
-                return texture2D({TEXTURE_MASK}, {MASK_COORDS}); 
+                return texture2D({TEXTURE_MASK}, {MASK_COORDS}).a; 
             }}
         "
         )
@@ -537,7 +528,7 @@ impl FragmentBuilder {
             source,
             "
             void main() {{
-                {color_output} = {GET_COLOR}() * {GET_MASK_ALPHA}();
+                {color_output} = ({GET_COLOR}() * {GET_MASK_ALPHA}());
             }}
             ",
         )
@@ -563,44 +554,4 @@ impl GlVersion {
             GlVersion::Es30 => "#version 300 es",
         }
     }
-}
-
-/// Register an `Affine` as a uniform.
-///
-/// # Safety
-///
-/// The target uniform must be a `mat3`.
-unsafe fn uniform_affine<H: HasContext + ?Sized>(
-    context: &H,
-    uniform: &H::UniformLocation,
-    aff: &Affine,
-) {
-    let aff = affine_to_gl_matrix(aff);
-
-    context.uniform_matrix_3_f32_slice(Some(uniform), false, &aff);
-}
-
-/// Register a `vec4` as a uniform.
-///
-/// # Safety
-///
-/// The target uniform must be a `vec4`.
-unsafe fn uniform_vec4<H: HasContext + ?Sized>(
-    context: &H,
-    uniform: &H::UniformLocation,
-    vec: &[f32; 4],
-) {
-    context.uniform_4_f32_slice(Some(uniform), vec)
-}
-
-/// Convert an `Affine` to an OpenGL matrix.
-fn affine_to_gl_matrix(aff: &Affine) -> [f32; 9] {
-    macro_rules! f {
-        ($e:expr) => {
-            ($e as f32)
-        };
-    }
-
-    let [a, b, c, d, e, f] = aff.as_coeffs();
-    [f!(a), f!(b), 0.0, f!(c), f!(d), 0.0, f!(e), f!(f), 1.0]
 }

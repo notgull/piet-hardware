@@ -2,16 +2,20 @@
 
 include!("util/setup_context.rs");
 
-use piet::kurbo::{BezPath, Point};
+use piet::kurbo::{Affine, BezPath, Circle, Point};
 use piet::RenderContext as _;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A path representing a star.
     let path = generate_five_pointed_star(Point::new(200.0, 200.0), 100.0, 200.0);
+    let circle_path = Circle::new(Point::new(200.0, 200.0), 150.0);
 
     util::with_renderer(move |render_context| {
         // Clear the screen to a light blue.
         render_context.clear(None, piet::Color::rgb8(0x87, 0xce, 0xeb));
+
+        // Add a clip.
+        render_context.clip(circle_path);
 
         // Draw a solid red using the path.
         let solid = render_context.solid_brush(piet::Color::rgb8(0xff, 0x00, 0x00));
@@ -20,6 +24,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Draw a black outline using the path.
         let outline = render_context.solid_brush(piet::Color::rgb8(0x00, 0x00, 0x00));
         render_context.stroke(&path, &outline, 5.0);
+
+        // Test the transform.
+        render_context
+            .with_save(|rc| {
+                let trans = Affine::translate((350.0, 50.0)) * Affine::scale(0.75);
+                let solid = rc.solid_brush(piet::Color::rgb8(0x00, 0xff, 0x00));
+
+                rc.transform(trans);
+                rc.fill(&path, &solid);
+                rc.stroke(&path, &outline, 5.0);
+
+                Ok(())
+            })
+            .unwrap();
 
         // Panic on any errors.
         render_context.finish().unwrap();

@@ -86,18 +86,11 @@ impl<H: HasContext + ?Sized> Mask<H> {
         &self.texture
     }
 
-    /// Bind the framebuffer to the draw buffer.
-    fn bind_framebuffer(&self) -> Result<BoundMask<'_, H>, Error> {
-        let mut bound = self.framebuffer.bind();
-
-        // Bind the texture as the first attachment.
-        bound.bind_color0(&self.texture);
-
-        // Check for errors.
-        bound.check_error()?;
-
-        // Keep it bound and unbind it when we're done.
-        Ok(BoundMask { _bound: bound })
+    pub(crate) fn as_brush_mask(&self) -> crate::brush::Mask<'_, H> {
+        crate::brush::Mask {
+            texture: &self.texture,
+            transform: &self.transform,
+        }
     }
 }
 
@@ -105,7 +98,7 @@ impl<H: HasContext + ?Sized> RenderContext<'_, H> {
     /// Draw to a mask.
     pub(super) fn draw_to_mask(&mut self, mask: &mut Mask<H>, shape: impl Shape) {
         // Bind the framebuffer so we can draw to it.
-        let _guard = match mask.bind_framebuffer() {
+        let _guard = match bind_framebuffer(&mask.framebuffer, &mask.texture) {
             Ok(guard) => guard,
             Err(e) => {
                 self.last_error = Err(e);
@@ -113,13 +106,40 @@ impl<H: HasContext + ?Sized> RenderContext<'_, H> {
             }
         };
 
-        // Draw to the current mask.
-        let draw = || todo!();
+        // Draw to the mask.
+        let brush_mask = if mask.empty {
+            None
+        } else {
+            Some(mask.as_brush_mask())
+        };
 
-        todo!()
+        self.fill_impl(
+            shape,
+            None,
+            lyon_tessellation::FillRule::NonZero,
+            brush_mask.as_ref(),
+        );
+
+        mask.empty = false;
     }
 }
 
 struct BoundMask<'a, H: HasContext + ?Sized> {
     _bound: BoundFramebuffer<'a, H>,
+}
+
+fn bind_framebuffer<'a, H: HasContext + ?Sized>(
+    framebuffer: &'a Framebuffer<H>,
+    texture: &Texture<H>,
+) -> Result<BoundMask<'a, H>, Error> {
+    let mut bound = framebuffer.bind();
+
+    // Bind the texture as the first attachment.
+    bound.bind_color0(texture);
+
+    // Check for errors.
+    bound.check_error()?;
+
+    // Keep it bound and unbind it when we're done.
+    Ok(BoundMask { _bound: bound })
 }

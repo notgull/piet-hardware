@@ -18,6 +18,7 @@
 mod brush;
 mod mask;
 mod resources;
+mod text;
 
 use arrayvec::ArrayVec;
 use glow::HasContext;
@@ -42,6 +43,7 @@ use std::ops::RangeBounds;
 use std::rc::Rc;
 
 pub use brush::Brush;
+pub use text::{Text, TextLayout, TextLayoutBuilder};
 
 /// The OpenGL version that is required.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -86,6 +88,29 @@ struct Buffers<H: HasContext + ?Sized> {
 
     /// The VBO for the index buffer.
     ibo: resources::VertexBuffer<H>,
+}
+
+impl<H: HasContext + ?Sized> Buffers<H> {
+    fn push_buffers(&mut self) -> Result<(), Error> {
+        // Bind the VAO and VBO.
+        let mut vao = self.vao.bind();
+        let mut vbo = self.vbo.bind(resources::BufferTarget::Array);
+        let mut ibo = self.ibo.bind(resources::BufferTarget::ElementArray);
+
+        // Upload the vertex data.
+        vbo.upload_f32(bytemuck::cast_slice(&self.vertex_buffer.vertices));
+        ibo.upload_u32(&self.vertex_buffer.indices);
+        vao.attribute_ptr(&vbo);
+
+        drop(vbo);
+
+        // Draw the triangles.
+        unsafe {
+            vao.draw_triangles(self.vertex_buffer.indices.len());
+        }
+
+        Ok(())
+    }
 }
 
 impl<H: HasContext + ?Sized> GlContext<H> {
@@ -138,28 +163,6 @@ impl<H: HasContext + ?Sized> GlContext<H> {
         let Self { context, .. } = self;
         Rc::try_unwrap(context).ok()
     }
-
-    /// Push the current buffers with the current program.
-    unsafe fn push_buffers(&mut self) -> Result<(), Error> {
-        // Bind the VAO and VBO.
-        let mut vao = self.buffers.vao.bind();
-        let mut vbo = self.buffers.vbo.bind(resources::BufferTarget::Array);
-        let mut ibo = self.buffers.ibo.bind(resources::BufferTarget::ElementArray);
-
-        // Upload the vertex data.
-        vbo.upload_f32(bytemuck::cast_slice(&self.buffers.vertex_buffer.vertices));
-        ibo.upload_u32(&self.buffers.vertex_buffer.indices);
-        vao.attribute_ptr(&vbo);
-
-        drop(vbo);
-
-        // Draw the triangles.
-        unsafe {
-            vao.draw_triangles(self.buffers.vertex_buffer.indices.len());
-        }
-
-        Ok(())
-    }
 }
 
 /// A rendering context that uses OpenGL for rendering.
@@ -182,20 +185,28 @@ pub struct RenderContext<'a, H: HasContext + ?Sized> {
     text: Text<H>,
 
     /// The current state of the render context.
-    state: TinyVec<[RenderState; 1]>,
+    state: TinyVec<[RenderState<H>; 1]>,
 
     /// The last error recorded, or `Ok(())` if none have occurred.
     last_error: Result<(), Error>,
 }
 
 /// The current state of the render context.
-#[derive(Default)]
-struct RenderState {
+struct RenderState<H: HasContext + ?Sized> {
     /// The current transform.
     transform: Affine,
 
     /// The current clip.
-    clip: Option<BezPath>,
+    mask: Option<mask::Mask<H>>,
+}
+
+impl<H: HasContext + ?Sized> Default for RenderState<H> {
+    fn default() -> Self {
+        Self {
+            transform: Affine::IDENTITY,
+            mask: None,
+        }
+    }
 }
 
 impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
@@ -226,7 +237,7 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
             default_transform,
             state: TinyVec::from([RenderState {
                 transform: default_transform,
-                clip: None,
+                mask: None,
             }]),
             last_error: Ok(()),
         }
@@ -236,15 +247,21 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
         self.gl.get_ref()
     }
 
-    fn currrent_state(&self) -> &RenderState {
+    fn currrent_state(&self) -> &RenderState<H> {
         self.state.last().unwrap()
     }
 
-    fn current_state_mut(&mut self) -> &mut RenderState {
+    fn current_state_mut(&mut self) -> &mut RenderState<H> {
         self.state.last_mut().unwrap()
     }
 
-    fn fill_impl(&mut self, shape: impl Shape, brush: &Brush, fill_rule: FillRule) {
+    fn fill_impl(
+        &mut self,
+        shape: impl Shape,
+        brush: Option<&Brush>,
+        fill_rule: FillRule,
+        mask: Option<&brush::Mask<'_, H>>,
+    ) {
         // Convert the kurbo shape to a lyon path iterator.
         let path_events = convert_path(shape.path_elements(self.tolerance));
 
@@ -267,53 +284,38 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
             return;
         }
 
-        self.render_buffers(brush);
+        self.render_buffers(brush, mask);
     }
 
-    fn render_buffers(&mut self, brush: &Brush) {
+    fn render_buffers(&mut self, brush: Option<&Brush>, mask: Option<&brush::Mask<'_, H>>) {
         // Activate the program for this brush.
-        let result = self.gl.shader_cache.with_brush(
+        let program = self.gl.shader_cache.with_target(
             &self.gl.context,
             self.gl.version,
-            brush,
-            &self.state.last().unwrap().transform,
-            None, //todo
-            || {
-                // Bind the VAO and VBO.
-                let mut vao = self.gl.buffers.vao.bind();
-                let mut vbo = self.gl.buffers.vbo.bind(resources::BufferTarget::Array);
-                let mut ibo = self
-                    .gl
-                    .buffers
-                    .ibo
-                    .bind(resources::BufferTarget::ElementArray);
-
-                // Upload the vertex data.
-                vbo.upload_f32(bytemuck::cast_slice(
-                    &self.gl.buffers.vertex_buffer.vertices,
-                ));
-                ibo.upload_u32(&self.gl.buffers.vertex_buffer.indices);
-                vao.attribute_ptr(&vbo);
-
-                drop(vbo);
-
-                // Draw the triangles.
-                unsafe {
-                    vao.draw_triangles(self.gl.buffers.vertex_buffer.indices.len());
-                }
-
-                Ok(())
+            match brush {
+                Some(brush) => brush::Target::Surface(brush),
+                None => brush::Target::Framebuffer,
             },
+            &self.state.last().unwrap().transform,
+            mask,
         );
+
+        // Upload the vertex data.
+        let result = program.and_then(|_program| self.gl.buffers.push_buffers());
 
         if let Err(e) = result {
             self.last_error = Err(e);
         }
     }
 
-    fn bbox(&self) -> impl Fn() -> Rect + 'static {
+    fn bbox<'s>(&self, shape: &'s impl Shape) -> impl Fn() -> Rect + 's {
         let size = self.size;
-        move || Rect::from_origin_size((0.0, 0.0), (size.0 as f64, size.1 as f64))
+        move || {
+            let our_rect = Rect::from_origin_size((0.0, 0.0), (size.0 as f64, size.1 as f64));
+            let shape_rect = shape.bounding_box();
+
+            our_rect.intersect(shape_rect)
+        }
     }
 }
 
@@ -342,7 +344,7 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
         let region = region.into();
 
         // Fall back to fill if we're not clearing the entire screen.
-        if region.is_some() || self.currrent_state().clip.is_some() {
+        if region.is_some() || self.currrent_state().mask.is_some() {
             let brush = self.solid_brush(color);
 
             let rect = match region {
@@ -413,23 +415,66 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
         }
 
         // Render the buffers to the screen.
-        let brush = brush.make_brush(self, self.bbox());
-
-        self.render_buffers(brush.as_ref());
+        let brush = brush.make_brush(self, self.bbox(&shape));
+        let restore = RestoreMask::new(self);
+        restore.context.render_buffers(
+            Some(brush.as_ref()),
+            restore.mask.as_ref().map(|s| s.as_brush_mask()).as_ref(),
+        );
     }
 
     fn fill(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
-        let brush = brush.make_brush(self, self.bbox());
-        self.fill_impl(shape, brush.as_ref(), FillRule::NonZero);
+        let brush = brush.make_brush(self, self.bbox(&shape));
+        let restore = RestoreMask::new(self);
+        restore.context.fill_impl(
+            shape,
+            Some(brush.as_ref()),
+            FillRule::NonZero,
+            restore.mask.as_ref().map(|s| s.as_brush_mask()).as_ref(),
+        );
     }
 
     fn fill_even_odd(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
-        let brush = brush.make_brush(self, self.bbox());
-        self.fill_impl(shape, brush.as_ref(), FillRule::EvenOdd);
+        let brush = brush.make_brush(self, self.bbox(&shape));
+        let restore = RestoreMask::new(self);
+        restore.context.fill_impl(
+            shape,
+            Some(brush.as_ref()),
+            FillRule::EvenOdd,
+            restore.mask.as_ref().map(|s| s.as_brush_mask()).as_ref(),
+        );
     }
 
     fn clip(&mut self, shape: impl Shape) {
-        self.current_state_mut().clip = Some(shape.into_path(self.tolerance));
+        let mask = self
+            .current_state_mut()
+            .mask
+            .take()
+            .map(Ok)
+            .unwrap_or_else(|| {
+                mask::Mask::new(
+                    &self.gl.context,
+                    self.size.0,
+                    self.size.1,
+                    self.default_transform,
+                )
+            });
+
+        let mut mask = match mask {
+            Ok(mask) => mask,
+            Err(e) => {
+                self.last_error = Err(e);
+                return;
+            }
+        };
+
+        let mut restore = RestoreMask {
+            context: self,
+            mask: Some(mask),
+        };
+        restore
+            .context
+            .draw_to_mask(restore.mask.as_mut().unwrap(), shape)
     }
 
     fn text(&mut self) -> &mut Self::Text {
@@ -444,7 +489,7 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
         // Add a new state to the stack.
         self.state.push(RenderState {
             transform: self.default_transform,
-            clip: None,
+            mask: None,
         });
         Ok(())
     }
@@ -514,125 +559,25 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
     }
 }
 
-/// The text renderer used by the [`RenderContext`].
-pub struct Text<H: HasContext + ?Sized> {
-    context: Rc<H>,
+struct RestoreMask<'a, 'b, H: HasContext + ?Sized> {
+    context: &'a mut RenderContext<'b, H>,
+    mask: Option<mask::Mask<H>>,
 }
 
-impl<H: HasContext + ?Sized> Clone for Text<H> {
-    fn clone(&self) -> Self {
-        Self {
-            context: self.context.clone(),
-        }
-    }
-}
-
-impl<H: HasContext + ?Sized> piet::Text for Text<H> {
-    type TextLayout = TextLayout<H>;
-    type TextLayoutBuilder = TextLayoutBuilder<H>;
-
-    fn font_family(&mut self, family_name: &str) -> Option<FontFamily> {
-        todo!()
+impl<'a, 'b, H: HasContext + ?Sized> RestoreMask<'a, 'b, H> {
+    fn new(context: &'a mut RenderContext<'b, H>) -> Self {
+        let mask = context.current_state_mut().mask.take();
+        Self { context, mask }
     }
 
-    fn load_font(&mut self, data: &[u8]) -> Result<FontFamily, Error> {
-        todo!()
-    }
-
-    fn new_text_layout(&mut self, text: impl piet::TextStorage) -> Self::TextLayoutBuilder {
-        todo!()
+    fn mask(&self) -> Option<brush::Mask<'_, H>> {
+        self.mask.as_ref().map(|s| s.as_brush_mask())
     }
 }
 
-/// The text layout builder used by the [`RenderContext`].
-pub struct TextLayoutBuilder<H: HasContext + ?Sized> {
-    context: Rc<H>,
-}
-
-impl<H: HasContext + ?Sized> Clone for TextLayoutBuilder<H> {
-    fn clone(&self) -> Self {
-        Self {
-            context: self.context.clone(),
-        }
-    }
-}
-
-impl<H: HasContext + ?Sized> piet::TextLayoutBuilder for TextLayoutBuilder<H> {
-    type Out = TextLayout<H>;
-
-    fn alignment(self, alignment: TextAlignment) -> Self {
-        todo!()
-    }
-
-    fn max_width(self, width: f64) -> Self {
-        todo!()
-    }
-
-    fn default_attribute(self, attribute: impl Into<TextAttribute>) -> Self {
-        todo!()
-    }
-
-    fn range_attribute(
-        self,
-        range: impl RangeBounds<usize>,
-        attribute: impl Into<TextAttribute>,
-    ) -> Self {
-        todo!()
-    }
-
-    fn build(self) -> Result<Self::Out, Error> {
-        todo!()
-    }
-}
-
-/// The text layout used by the [`RenderContext`].
-pub struct TextLayout<H: HasContext + ?Sized> {
-    context: Rc<H>,
-}
-
-impl<H: HasContext + ?Sized> Clone for TextLayout<H> {
-    fn clone(&self) -> Self {
-        Self {
-            context: self.context.clone(),
-        }
-    }
-}
-
-impl<H: HasContext + ?Sized> piet::TextLayout for TextLayout<H> {
-    fn size(&self) -> Size {
-        todo!()
-    }
-
-    fn trailing_whitespace_width(&self) -> f64 {
-        todo!()
-    }
-
-    fn image_bounds(&self) -> Rect {
-        todo!()
-    }
-
-    fn text(&self) -> &str {
-        todo!()
-    }
-
-    fn line_count(&self) -> usize {
-        todo!()
-    }
-
-    fn line_metric(&self, line_number: usize) -> Option<LineMetric> {
-        todo!()
-    }
-
-    fn line_text(&self, line_number: usize) -> Option<&str> {
-        todo!()
-    }
-
-    fn hit_test_point(&self, point: Point) -> HitTestPoint {
-        todo!()
-    }
-
-    fn hit_test_text_position(&self, idx: usize) -> HitTestPosition {
-        todo!()
+impl<H: HasContext + ?Sized> Drop for RestoreMask<'_, '_, H> {
+    fn drop(&mut self) {
+        self.context.current_state_mut().mask = self.mask.take();
     }
 }
 
