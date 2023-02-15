@@ -195,6 +195,18 @@ impl<H: HasContext + ?Sized> Framebuffer<H> {
             })
         }
     }
+
+    /// Bind the framebuffer to `GL_FRAMEBUFFER`.
+    pub fn bind(&self) -> BoundFramebuffer<'_, H> {
+        unsafe {
+            self.context
+                .bind_framebuffer(glow::FRAMEBUFFER, Some(self.id));
+        }
+
+        BoundFramebuffer {
+            context: &self.context,
+        }
+    }
 }
 
 /// A texture.
@@ -239,11 +251,7 @@ impl<H: HasContext + ?Sized> Texture<H> {
     /// Run with this texture bound to the `GL_TEXTURE_2D` unit ID.
     ///
     /// `active` should be `Some` to also bind this to `GL_TEXTURE0 + active`.
-    pub(super) fn bind<R>(
-        &self,
-        active: Option<u32>,
-        f: impl FnOnce(&mut BoundTexture<'_, H>) -> R,
-    ) -> R {
+    pub(super) fn bind(&self, active: Option<u32>) -> BoundTexture<'_, H> {
         // If possible, set the active texture.
         if let Some(active) = active {
             unsafe {
@@ -256,16 +264,10 @@ impl<H: HasContext + ?Sized> Texture<H> {
             self.context.bind_texture(glow::TEXTURE_2D, Some(self.id));
         }
 
-        // Unbind after the scope is over.
-        let _guard = CallOnDrop(|| unsafe {
-            self.context.bind_texture(glow::TEXTURE_2D, None);
-        });
-
-        // Run the function.
-        f(&mut BoundTexture {
+        BoundTexture {
             context: &self.context,
             active,
-        })
+        }
     }
 }
 
@@ -375,18 +377,102 @@ pub(super) struct BoundTexture<'a, H: HasContext + ?Sized> {
     active: Option<u32>,
 }
 
+impl<H: HasContext + ?Sized> Drop for BoundTexture<'_, H> {
+    fn drop(&mut self) {
+        unsafe {
+            self.context.bind_texture(glow::TEXTURE_2D, None);
+        }
+    }
+}
+
 impl<H: HasContext + ?Sized> BoundTexture<'_, H> {
     /// Register this bound texture to a uniform.
     ///
     /// # Safety
     ///
     /// The target uniform must be a `sampler2D`.
-    pub(super) unsafe fn register_in_uniform(&self, uniform: &H::UniformLocation) {
+    pub(super) unsafe fn register_in_uniform(&mut self, uniform: &H::UniformLocation) {
         self.context.uniform_1_u32(
             Some(uniform),
             self.active
                 .expect("Called register_in_uniform for inactive texture"),
         )
+    }
+
+    /// Fill this texture with nothing.
+    pub(super) fn fill_with_nothing(&mut self, width: i32, height: i32) {
+        unsafe {
+            self.context.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGB as _,
+                width,
+                height,
+                0,
+                glow::RGB,
+                glow::UNSIGNED_BYTE,
+                None,
+            );
+        }
+    }
+
+    /// Set the texture parameters to NEAREST filtering.
+    pub(super) fn filtering_nearest(&mut self) {
+        unsafe {
+            self.context.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::NEAREST as _,
+            );
+            self.context.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::NEAREST as _,
+            );
+        }
+    }
+}
+
+/// An object representing a framebuffer bound to GL_FRAMEBUFFER.
+pub(super) struct BoundFramebuffer<'a, H: HasContext + ?Sized> {
+    context: &'a H,
+}
+
+impl<H: HasContext + ?Sized> Drop for BoundFramebuffer<'_, H> {
+    fn drop(&mut self) {
+        unsafe {
+            self.context.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+    }
+}
+
+impl<H: HasContext + ?Sized> BoundFramebuffer<'_, H> {
+    /// Bind this framebuffer as the first color attachment.
+    pub(super) fn bind_color0(&mut self, tex: &Texture<H>) {
+        unsafe {
+            self.context.framebuffer_texture(
+                glow::FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                Some(tex.id),
+                0,
+            );
+            self.context.draw_buffers(&[glow::COLOR_ATTACHMENT0]);
+        }
+    }
+
+    /// Check the frame buffers for errors.
+    pub(super) fn check_error(&mut self) -> Result<(), Error> {
+        unsafe {
+            if self.context.check_framebuffer_status(glow::FRAMEBUFFER)
+                == glow::FRAMEBUFFER_COMPLETE
+            {
+                Ok(())
+            } else {
+                Err(Error::BackendError(
+                    "unable to bind framebuffer for mask".into(),
+                ))
+            }
+        }
     }
 }
 

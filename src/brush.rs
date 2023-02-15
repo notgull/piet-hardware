@@ -24,6 +24,7 @@ const GET_COLOR: &str = "getColor";
 const SOLID_COLOR: &str = "solidColor";
 const TEXTURE_MASK: &str = "textureMask";
 const GET_MASK_ALPHA: &str = "getMaskAlpha";
+const OUTPUT_COLOR: &str = "outputColor";
 
 /// The brush type used by the [`RenderContext`].
 #[derive(Clone)]
@@ -99,6 +100,7 @@ enum MaskType {
 struct ShaderKey {
     input_type: InputType,
     mask_type: MaskType,
+    write_to_mask: bool,
 }
 
 /// A cache for brush-related shaders.
@@ -159,9 +161,10 @@ impl<H: HasContext + ?Sized> Brushes<H> {
                     uniform_affine(&**context, &mask_mvp_uniform, mask.transform);
                 }
 
-                mask.texture.bind(Some(0), |bound| unsafe {
+                let mut bound = mask.texture.bind(Some(0));
+                unsafe {
                     bound.register_in_uniform(&texture_mask_uniform);
-                });
+                }
             }
 
             // Set the solid color.
@@ -224,6 +227,7 @@ impl<H: HasContext + ?Sized> Brushes<H> {
             } else {
                 MaskType::NoMask
             },
+            false,
         )
     }
 
@@ -233,7 +237,7 @@ impl<H: HasContext + ?Sized> Brushes<H> {
         context: &Rc<H>,
         version: GlVersion,
     ) -> Result<&mut Program<H>, Error> {
-        self.fetch_or_create_shader(context, version, InputType::Empty, MaskType::NoMask)
+        self.fetch_or_create_shader(context, version, InputType::Empty, MaskType::NoMask, true)
     }
 
     /// Fetch the shader program from the cache or create a new one.
@@ -243,10 +247,12 @@ impl<H: HasContext + ?Sized> Brushes<H> {
         version: GlVersion,
         input_type: InputType,
         mask_type: MaskType,
+        write_to_mask: bool,
     ) -> Result<&mut Program<H>, Error> {
         let lookup_key = ShaderKey {
             input_type,
             mask_type,
+            write_to_mask,
         };
 
         // Use the cached version if available, or create a new one.
@@ -258,10 +264,17 @@ impl<H: HasContext + ?Sized> Brushes<H> {
                     .with_mask(mask_type)
                     .to_shader(context)?;
 
-                let fragment = FragmentBuilder::new(version)
-                    .with_mask_type(mask_type)
-                    .with_input_type(input_type)
-                    .to_shader(context)?;
+                let fragment = {
+                    let mut builder = FragmentBuilder::new(version);
+                    builder.with_mask_type(mask_type);
+                    builder.with_input_type(input_type);
+
+                    if write_to_mask {
+                        builder.write_to_layout();
+                    }
+
+                    builder.to_shader(context)?
+                };
 
                 let program = Program::with_vertex_and_fragment(vertex, fragment)?;
 
@@ -359,6 +372,9 @@ impl VertexBuilder {
 struct FragmentBuilder {
     /// The source code.
     source: String,
+
+    /// Whether or not we write to `gl_FragColor` or just `color`.
+    write_to_layout: bool,
 }
 
 impl FragmentBuilder {
@@ -373,7 +389,17 @@ impl FragmentBuilder {
 
                 source
             },
+            write_to_layout: false,
         }
+    }
+
+    /// Write to a color layout.
+    fn write_to_layout(&mut self) -> &mut Self {
+        self.write_to_layout = true;
+
+        writeln!(self.source, "layout(location = 0) out vec3 {OUTPUT_COLOR};").ok();
+
+        self
     }
 
     /// Use with the provided input type.
@@ -463,13 +489,18 @@ impl FragmentBuilder {
         let mut source = mem::take(&mut self.source);
 
         // Write the "main" function.
+        let color_output = if self.write_to_layout {
+            OUTPUT_COLOR
+        } else {
+            "gl_FragColor"
+        };
         writeln!(
             source,
             "
             void main() {{
-                gl_FragColor = {GET_COLOR}() * {GET_MASK_ALPHA}();
+                {color_output} = {GET_COLOR}() * {GET_MASK_ALPHA}();
             }}
-        "
+            ",
         )
         .ok();
 

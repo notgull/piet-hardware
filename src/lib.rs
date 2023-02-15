@@ -16,6 +16,7 @@
 //! [`piet-common`]: https://crates.io/crates/piet-common
 
 mod brush;
+mod mask;
 mod resources;
 
 use arrayvec::ArrayVec;
@@ -63,6 +64,11 @@ pub struct GlContext<H: HasContext + ?Sized> {
     /// Cache for shaders.
     shader_cache: brush::Brushes<H>,
 
+    /// Buffers for drawing.
+    buffers: Buffers<H>,
+}
+
+struct Buffers<H: HasContext + ?Sized> {
     /// Fill-based tessellator.
     fill_tesselator: FillTessellator,
 
@@ -106,14 +112,16 @@ impl<H: HasContext + ?Sized> GlContext<H> {
             } else {
                 GlVersion::Gl32
             },
-            vao: resources::VertexArray::new(&context)?,
-            vbo: resources::VertexBuffer::new(&context)?,
-            ibo: resources::VertexBuffer::new(&context)?,
+            buffers: Buffers {
+                vao: resources::VertexArray::new(&context)?,
+                vbo: resources::VertexBuffer::new(&context)?,
+                ibo: resources::VertexBuffer::new(&context)?,
+                fill_tesselator: FillTessellator::new(),
+                stroke_tesselator: StrokeTessellator::new(),
+                vertex_buffer: VertexBuffers::new(),
+            },
             context,
             shader_cache: brush::Brushes::new(),
-            fill_tesselator: FillTessellator::new(),
-            stroke_tesselator: StrokeTessellator::new(),
-            vertex_buffer: VertexBuffers::new(),
         })
     }
 
@@ -129,6 +137,28 @@ impl<H: HasContext + ?Sized> GlContext<H> {
     {
         let Self { context, .. } = self;
         Rc::try_unwrap(context).ok()
+    }
+
+    /// Push the current buffers with the current program.
+    unsafe fn push_buffers(&mut self) -> Result<(), Error> {
+        // Bind the VAO and VBO.
+        let mut vao = self.buffers.vao.bind();
+        let mut vbo = self.buffers.vbo.bind(resources::BufferTarget::Array);
+        let mut ibo = self.buffers.ibo.bind(resources::BufferTarget::ElementArray);
+
+        // Upload the vertex data.
+        vbo.upload_f32(bytemuck::cast_slice(&self.buffers.vertex_buffer.vertices));
+        ibo.upload_u32(&self.buffers.vertex_buffer.indices);
+        vao.attribute_ptr(&vbo);
+
+        drop(vbo);
+
+        // Draw the triangles.
+        unsafe {
+            vao.draw_triangles(self.buffers.vertex_buffer.indices.len());
+        }
+
+        Ok(())
     }
 }
 
@@ -222,14 +252,16 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
         options.fill_rule = fill_rule;
         options.tolerance = self.tolerance as f32;
 
-        self.gl.vertex_buffer.vertices.clear();
-        self.gl.vertex_buffer.indices.clear();
+        self.gl.buffers.vertex_buffer.vertices.clear();
+        self.gl.buffers.vertex_buffer.indices.clear();
 
         // Tessellate the path.
-        if let Err(e) = self.gl.fill_tesselator.tessellate(
+        if let Err(e) = self.gl.buffers.fill_tesselator.tessellate(
             path_events,
             &options,
-            &mut BuffersBuilder::new(&mut self.gl.vertex_buffer, |x: FillVertex<'_>| x.position()),
+            &mut BuffersBuilder::new(&mut self.gl.buffers.vertex_buffer, |x: FillVertex<'_>| {
+                x.position()
+            }),
         ) {
             self.last_error = Err(Error::BackendError(e.into()));
             return;
@@ -248,20 +280,26 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
             None, //todo
             || {
                 // Bind the VAO and VBO.
-                let mut vao = self.gl.vao.bind();
-                let mut vbo = self.gl.vbo.bind(resources::BufferTarget::Array);
-                let mut ibo = self.gl.ibo.bind(resources::BufferTarget::ElementArray);
+                let mut vao = self.gl.buffers.vao.bind();
+                let mut vbo = self.gl.buffers.vbo.bind(resources::BufferTarget::Array);
+                let mut ibo = self
+                    .gl
+                    .buffers
+                    .ibo
+                    .bind(resources::BufferTarget::ElementArray);
 
                 // Upload the vertex data.
-                vbo.upload_f32(bytemuck::cast_slice(&self.gl.vertex_buffer.vertices));
-                ibo.upload_u32(&self.gl.vertex_buffer.indices);
+                vbo.upload_f32(bytemuck::cast_slice(
+                    &self.gl.buffers.vertex_buffer.vertices,
+                ));
+                ibo.upload_u32(&self.gl.buffers.vertex_buffer.indices);
                 vao.attribute_ptr(&vbo);
 
                 drop(vbo);
 
                 // Draw the triangles.
                 unsafe {
-                    vao.draw_triangles(self.gl.vertex_buffer.indices.len());
+                    vao.draw_triangles(self.gl.buffers.vertex_buffer.indices.len());
                 }
 
                 Ok(())
@@ -358,16 +396,17 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
         options.start_cap = cvt_cap(style.line_cap);
         options.end_cap = cvt_cap(style.line_cap);
 
-        self.gl.vertex_buffer.vertices.clear();
-        self.gl.vertex_buffer.indices.clear();
+        self.gl.buffers.vertex_buffer.vertices.clear();
+        self.gl.buffers.vertex_buffer.indices.clear();
 
         // Tessellate the path.
-        if let Err(e) = self.gl.stroke_tesselator.tessellate(
+        if let Err(e) = self.gl.buffers.stroke_tesselator.tessellate(
             path_events,
             &options,
-            &mut BuffersBuilder::new(&mut self.gl.vertex_buffer, |x: StrokeVertex<'_, '_>| {
-                x.position()
-            }),
+            &mut BuffersBuilder::new(
+                &mut self.gl.buffers.vertex_buffer,
+                |x: StrokeVertex<'_, '_>| x.position(),
+            ),
         ) {
             self.last_error = Err(Error::BackendError(e.into()));
             return;
