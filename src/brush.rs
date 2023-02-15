@@ -24,6 +24,11 @@ const GET_COLOR: &str = "getColor";
 const SOLID_COLOR: &str = "solidColor";
 const TEXTURE_MASK: &str = "textureMask";
 const GET_MASK_ALPHA: &str = "getMaskAlpha";
+const GRADIENT_COLORS: &str = "gradientColors";
+const GRADIENT_STOPS: &str = "gradientStops";
+const GET_GRADIENT_COORD: &str = "getGradientCoord";
+const LINEAR_GRADIENT_START: &str = "linearGradientStart";
+const LINEAR_GRADIENT_END: &str = "linearGradientEnd";
 const OUTPUT_COLOR: &str = "outputColor";
 
 /// The brush type used by the [`RenderContext`].
@@ -407,6 +412,7 @@ impl FragmentBuilder {
         match ty {
             InputType::Empty => self.with_empty_color(),
             InputType::Solid => self.with_solid_color(),
+            InputType::Linear => self.with_linear_gradient(),
             _ => todo!(),
         }
     }
@@ -439,6 +445,39 @@ impl FragmentBuilder {
         "
         )
         .ok();
+
+        self
+    }
+
+    /// Use with a linear gradient.
+    fn with_linear_gradient(&mut self) -> &mut Self {
+        writeln!(
+            self.source,
+            "
+            uniform sampler2D {GRADIENT_STOPS};
+            uniform sampler2D {GRADIENT_COLORS};
+            uniform vec2 {LINEAR_GRADIENT_START};
+            uniform vec2 {LINEAR_GRADIENT_END};
+
+            float {GET_GRADIENT_COORD}(vec2 pos) {{
+                vec2 start = {LINEAR_GRADIENT_START};
+                vec2 end = {LINEAR_GRADIENT_END};
+                vec2 diff = end - start;
+                float len = length(diff);
+                float dot = dot(diff, pos - start);
+                return dot / len;
+            }}
+
+            vec4 {GET_COLOR}() {{
+                float coord = {GET_GRADIENT_COORD}(gl_FragCoord.xy);
+                float stop = texture2D({GRADIENT_STOPS}, vec2(coord, 0)).r;
+                vec4 color = texture2D({GRADIENT_COLORS}, vec2(stop, 0));
+                return color;
+            }}
+            "
+        ).ok();
+
+        todo!();
 
         self
     }
