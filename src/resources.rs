@@ -3,6 +3,7 @@
 use crate::Error;
 use glow::HasContext;
 use piet::kurbo::Affine;
+use piet::ImageFormat;
 
 use std::collections::hash_map::{Entry, HashMap};
 use std::fmt;
@@ -266,6 +267,15 @@ impl<H: HasContext + ?Sized> fmt::Debug for Texture<H> {
     }
 }
 
+impl<H: HasContext + ?Sized> Clone for Texture<H> {
+    fn clone(&self) -> Self {
+        Self {
+            context: self.context.clone(),
+            id: self.id,
+        }
+    }
+}
+
 impl<H: HasContext + ?Sized> Drop for Texture<H> {
     fn drop(&mut self) {
         unsafe {
@@ -456,6 +466,38 @@ impl<H: HasContext + ?Sized> BoundTexture<'_, H> {
                 None,
             );
         }
+    }
+
+    /// Fill this texture with an image.
+    pub(super) fn fill_with_image(
+        &mut self,
+        width: i32,
+        height: i32,
+        format: ImageFormat,
+        image: &[u8],
+    ) -> Result<(), Error> {
+        let format = match format {
+            ImageFormat::Grayscale => glow::RED,
+            ImageFormat::Rgb => glow::RGB,
+            ImageFormat::RgbaSeparate => glow::RGBA,
+            _ => return Err(Error::NotSupported),
+        };
+
+        unsafe {
+            self.context.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                format as _,
+                width,
+                height,
+                0,
+                format,
+                glow::UNSIGNED_BYTE,
+                Some(image),
+            );
+        }
+
+        Ok(())
     }
 
     /// Set the texture parameters to NEAREST filtering.

@@ -98,13 +98,21 @@ impl<H: HasContext + ?Sized> RenderContext<'_, H> {
     /// Draw to a mask.
     pub(super) fn draw_to_mask(&mut self, mask: &mut Mask<H>, shape: impl Shape) {
         // Bind the framebuffer so we can draw to it.
-        let _guard = match bind_framebuffer(&mask.framebuffer, &mask.texture) {
+        let context = self.gl.context.clone();
+        let _guard = match bind_framebuffer(&*context, &mask.framebuffer, &mask.texture, self.size)
+        {
             Ok(guard) => guard,
             Err(e) => {
                 self.last_error = Err(e);
                 return;
             }
         };
+
+        unsafe {
+            self.gl
+                .context
+                .viewport(0, 0, mask.size.0 as _, mask.size.1 as _)
+        }
 
         // Draw to the mask.
         let brush_mask = if mask.empty {
@@ -125,12 +133,29 @@ impl<H: HasContext + ?Sized> RenderContext<'_, H> {
 }
 
 struct BoundMask<'a, H: HasContext + ?Sized> {
-    _bound: BoundFramebuffer<'a, H>,
+    context: &'a H,
+    bound: Option<BoundFramebuffer<'a, H>>,
+    old_size: (u32, u32),
+}
+
+impl<H: HasContext + ?Sized> Drop for BoundMask<'_, H> {
+    fn drop(&mut self) {
+        // Unbind the framebuffer.
+        drop(self.bound.take());
+
+        // Restore the viewport.
+        unsafe {
+            self.context
+                .viewport(0, 0, self.old_size.0 as _, self.old_size.1 as _)
+        }
+    }
 }
 
 fn bind_framebuffer<'a, H: HasContext + ?Sized>(
+    context: &'a H,
     framebuffer: &'a Framebuffer<H>,
     texture: &Texture<H>,
+    old_size: (u32, u32),
 ) -> Result<BoundMask<'a, H>, Error> {
     let mut bound = framebuffer.bind();
 
@@ -141,5 +166,17 @@ fn bind_framebuffer<'a, H: HasContext + ?Sized>(
     bound.check_error()?;
 
     // Keep it bound and unbind it when we're done.
-    Ok(BoundMask { _bound: bound })
+    Ok(BoundMask {
+        bound: Some(bound),
+        old_size,
+        context,
+    })
+}
+
+struct CallOnDrop<F: FnMut()>(F);
+
+impl<F: FnMut()> Drop for CallOnDrop<F> {
+    fn drop(&mut self) {
+        (self.0)();
+    }
 }

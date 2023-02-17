@@ -68,6 +68,9 @@ pub struct GlContext<H: HasContext + ?Sized> {
 
     /// Buffers for drawing.
     buffers: Buffers<H>,
+
+    /// Text handler.
+    text: Text,
 }
 
 struct Buffers<H: HasContext + ?Sized> {
@@ -145,6 +148,7 @@ impl<H: HasContext + ?Sized> GlContext<H> {
                 stroke_tesselator: StrokeTessellator::new(),
                 vertex_buffer: VertexBuffers::new(),
             },
+            text: Text::new(),
             context,
             shader_cache: brush::Brushes::new(),
         })
@@ -156,6 +160,9 @@ impl<H: HasContext + ?Sized> GlContext<H> {
     }
 
     /// Consume this structure and return the underlying context.
+    ///
+    /// If there are any live `Text` or `Image` objects, this will return
+    /// `None`, since those objects hold a reference to the context.
     pub fn into_inner(self) -> Option<H>
     where
         H: Sized,
@@ -180,9 +187,6 @@ pub struct RenderContext<'a, H: HasContext + ?Sized> {
 
     /// Default transform for fitting coordinate space to framebuffer.
     default_transform: Affine,
-
-    /// The text manager.
-    text: Text<H>,
 
     /// The current state of the render context.
     state: TinyVec<[RenderState<H>; 1]>,
@@ -228,9 +232,6 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
         }
 
         Self {
-            text: Text {
-                context: gl.context.clone(),
-            },
             size: (width, height),
             gl,
             tolerance: 5.0,
@@ -241,6 +242,15 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
             }]),
             last_error: Ok(()),
         }
+    }
+
+    /// Set the tolerance for rasterizing paths.
+    ///
+    /// The tolerance is the maximum distance between the path and the rasterized
+    /// version. Higher values will result in faster rendering, but lower quality.
+    /// Lower values will result in slower rendering, but higher quality.
+    pub fn set_tolerance(&mut self, tolerance: f64) {
+        self.tolerance = tolerance;
     }
 
     fn context(&self) -> &H {
@@ -258,7 +268,7 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
     fn fill_impl(
         &mut self,
         shape: impl Shape,
-        brush: Option<&Brush>,
+        brush: Option<&Brush<H>>,
         fill_rule: FillRule,
         mask: Option<&brush::Mask<'_, H>>,
     ) {
@@ -287,7 +297,7 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
         self.render_buffers(brush, mask);
     }
 
-    fn render_buffers(&mut self, brush: Option<&Brush>, mask: Option<&brush::Mask<'_, H>>) {
+    fn render_buffers(&mut self, brush: Option<&Brush<H>>, mask: Option<&brush::Mask<'_, H>>) {
         // Activate the program for this brush.
         let program = self.gl.shader_cache.with_target(
             &self.gl.context,
@@ -320,9 +330,9 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
 }
 
 impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
-    type Brush = Brush;
-    type Text = Text<H>;
-    type TextLayout = TextLayout<H>;
+    type Brush = Brush<H>;
+    type Text = Text;
+    type TextLayout = TextLayout;
     type Image = Image<H>;
 
     fn status(&mut self) -> Result<(), Error> {
@@ -460,7 +470,7 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
                 )
             });
 
-        let mut mask = match mask {
+        let mask = match mask {
             Ok(mask) => mask,
             Err(e) => {
                 self.last_error = Err(e);
@@ -478,7 +488,7 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
     }
 
     fn text(&mut self) -> &mut Self::Text {
-        &mut self.text
+        &mut self.gl.text
     }
 
     fn draw_text(&mut self, layout: &Self::TextLayout, pos: impl Into<Point>) {
@@ -524,7 +534,7 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
         buf: &[u8],
         format: ImageFormat,
     ) -> Result<Self::Image, Error> {
-        todo!()
+        Image::from_image(&self.gl.context, (width, height), format, buf)
     }
 
     fn draw_image(
@@ -583,20 +593,54 @@ impl<H: HasContext + ?Sized> Drop for RestoreMask<'_, '_, H> {
 
 /// The image type used by the [`RenderContext`].
 pub struct Image<H: HasContext + ?Sized> {
-    context: Rc<H>,
+    /// The underlying texture.
+    texture: resources::Texture<H>,
+
+    /// The size of the image.
+    size: Size,
 }
 
 impl<H: HasContext + ?Sized> Clone for Image<H> {
     fn clone(&self) -> Self {
         Self {
-            context: self.context.clone(),
+            texture: self.texture.clone(),
+            size: self.size,
         }
     }
 }
 
 impl<H: HasContext + ?Sized> piet::Image for Image<H> {
     fn size(&self) -> Size {
-        todo!()
+        self.size
+    }
+}
+
+impl<H: HasContext + ?Sized> Image<H> {
+    fn from_image(
+        context: &Rc<H>,
+        size: (usize, usize),
+        format: ImageFormat,
+        data: &[u8],
+    ) -> Result<Self, Error> {
+        // Create the texture.
+        let tex = resources::Texture::new(context)?;
+        let (width, height) = size;
+
+        // Upload the data.
+        {
+            let mut bound = tex.bind(None);
+            bound.fill_with_image(
+                width.try_into().expect("width too large"),
+                width.try_into().expect("height too large"),
+                format,
+                data,
+            )?;
+        }
+
+        Ok(Self {
+            texture: tex,
+            size: Size::new(width as f64, height as f64),
+        })
     }
 }
 

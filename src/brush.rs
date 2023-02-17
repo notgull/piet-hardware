@@ -3,7 +3,7 @@
 #![allow(clippy::wrong_self_convention)]
 
 use crate::resources::{BoundProgram, Fragment, Program, Shader, Texture, Vertex};
-use crate::{Error, GlVersion, RenderContext};
+use crate::{Error, GlVersion, Image, RenderContext};
 
 use glow::HasContext;
 use piet::kurbo::{Affine, Rect};
@@ -17,32 +17,65 @@ use std::rc::Rc;
 
 // Various variable/function names used in GLSL.
 const IN_POSITION: &str = "position";
-const MVP: &str = "mvp";
-const MASK_MVP: &str = "maskMvp";
-const MASK_COORDS: &str = "maskCoords";
-const GET_COLOR: &str = "getColor";
-const SOLID_COLOR: &str = "solidColor";
-const TEXTURE_MASK: &str = "textureMask";
-const GET_MASK_ALPHA: &str = "getMaskAlpha";
-const GRADIENT_COLORS: &str = "gradientColors";
-const GRADIENT_STOPS: &str = "gradientStops";
-const GET_GRADIENT_COORD: &str = "getGradientCoord";
+const OUTPUT_COLOR: &str = "outputColor";
+const TEXTURE_COORDS: &str = "textureCoords";
+
 const LINEAR_GRADIENT_START: &str = "linearGradientStart";
 const LINEAR_GRADIENT_END: &str = "linearGradientEnd";
-const OUTPUT_COLOR: &str = "outputColor";
+const GRADIENT_COLORS: &str = "gradientColors";
+const GRADIENT_STOPS: &str = "gradientStops";
+
+const MVP: &str = "mvp";
+const SOLID_COLOR: &str = "solidColor";
+const SRC_SIZE: &str = "srcSize";
+const DST_RECT: &str = "dstRect";
+
+const MASK_MVP: &str = "maskMvp";
+const MASK_COORDS: &str = "maskCoords";
+const TEXTURE_MASK: &str = "textureMask";
+
+const GET_COLOR: &str = "getColor";
+const GET_MASK_ALPHA: &str = "getMaskAlpha";
+const GET_GRADIENT_COORD: &str = "getGradientCoord";
 
 /// The brush type used by the [`RenderContext`].
-#[derive(Clone)]
-pub struct Brush(BrushInner);
+pub struct Brush<H: HasContext + ?Sized>(BrushInner<H>);
 
-#[derive(Clone)]
-enum BrushInner {
+enum BrushInner<H: HasContext + ?Sized> {
+    /// A solid color.
     Solid(piet::Color),
+
+    /// A linear gradient.
     LinearGradient(FixedLinearGradient),
+
+    /// A radial gradient.
     RadialGradient(FixedRadialGradient),
+
+    /// A texture.
+    Texture {
+        /// The texture.
+        texture: Texture<H>,
+
+        /// The destination rectangle.
+        dest: Rect,
+    },
 }
 
-impl Brush {
+impl<H: HasContext + ?Sized> Clone for Brush<H> {
+    fn clone(&self) -> Self {
+        match &self.0 {
+            BrushInner::Solid(color) => Brush::solid(*color),
+            BrushInner::LinearGradient(gradient) => Brush::linear_gradient(gradient.clone()),
+            BrushInner::RadialGradient(gradient) => Brush::radial_gradient(gradient.clone()),
+            BrushInner::Texture { texture, dest } => Brush(BrushInner::Texture {
+                texture: texture.clone(),
+                dest: *dest,
+            }),
+        }
+    }
+}
+
+impl<H: HasContext + ?Sized> Brush<H> {
     pub(super) fn solid(color: piet::Color) -> Self {
         Brush(BrushInner::Solid(color))
     }
@@ -60,16 +93,17 @@ impl Brush {
             BrushInner::Solid(_) => InputType::Solid,
             BrushInner::LinearGradient(_) => InputType::Linear,
             BrushInner::RadialGradient(_) => InputType::Radial,
+            BrushInner::Texture { .. } => InputType::Texture,
         }
     }
 }
 
-impl<'a, H: HasContext + ?Sized> IntoBrush<RenderContext<'a, H>> for Brush {
+impl<'a, H: HasContext + ?Sized> IntoBrush<RenderContext<'a, H>> for Brush<H> {
     fn make_brush<'x>(
         &'x self,
         _piet: &mut RenderContext<'a, H>,
         _bbox: impl FnOnce() -> Rect,
-    ) -> Cow<'x, Brush> {
+    ) -> Cow<'x, Brush<H>> {
         Cow::Borrowed(self)
     }
 }
@@ -91,6 +125,7 @@ enum InputType {
     Solid,
     Linear,
     Radial,
+    Texture,
 }
 
 /// Whether or not we use a mask.
@@ -108,15 +143,15 @@ struct ShaderKey {
     write_to_mask: bool,
 }
 
-pub(super) enum Target<'a> {
+pub(super) enum Target<'a, H: HasContext + ?Sized> {
     /// Draw to the surface, using the given brush.
-    Surface(&'a Brush),
+    Surface(&'a Brush<H>),
 
     /// Draw to a framebuffer, using the empty brush.
     Framebuffer,
 }
 
-impl Target<'_> {
+impl<H: HasContext + ?Sized> Target<'_, H> {
     fn input_type(&self) -> InputType {
         match self {
             Target::Surface(brush) => brush.input_type(),
@@ -146,7 +181,7 @@ impl<H: HasContext + ?Sized> Brushes<H> {
         &mut self,
         context: &Rc<H>,
         version: GlVersion,
-        brush: Target<'_>,
+        brush: Target<'_, H>,
         mvp: &Affine,
         mask: Option<&Mask<'_, H>>,
     ) -> Result<BoundProgram<'_, H>, Error> {
@@ -199,7 +234,7 @@ impl<H: HasContext + ?Sized> Brushes<H> {
         &mut self,
         context: &Rc<H>,
         version: GlVersion,
-        brush: &Brush,
+        brush: &Brush<H>,
         mask: Option<&Mask<'_, H>>,
     ) -> Result<&mut Program<H>, Error> {
         self.fetch_or_create_shader(
@@ -286,8 +321,11 @@ struct VertexBuilder {
     /// The source code.
     source: String,
 
-    /// Whether we are using a texture.
+    /// Whether we are using a texture as the mask.
     textured_mask: bool,
+
+    /// Whether we are using a texture as the input.
+    textured_input: bool,
 }
 
 impl VertexBuilder {
@@ -306,6 +344,7 @@ impl VertexBuilder {
                 source
             },
             textured_mask: false,
+            textured_input: false,
         }
     }
 
