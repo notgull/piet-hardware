@@ -30,6 +30,8 @@
 //! [`piet::RenderContext`]: https://docs.rs/piet/latest/piet/trait.RenderContext.html
 //! [`piet-common`]: https://crates.io/crates/piet-common
 
+#![allow(clippy::uninlined_format_args)]
+
 mod brush;
 mod mask;
 mod resources;
@@ -215,8 +217,11 @@ pub struct RenderContext<'a, H: HasContext + ?Sized> {
 
 /// The current state of the render context.
 struct RenderState<H: HasContext + ?Sized> {
-    /// The current transform.
-    transform: Affine,
+    /// The current transform with OpenGL scaling in mind.
+    gl_transform: Affine,
+
+    /// The current transform without OpenGL scaling in mind.
+    pixel_transform: Affine,
 
     /// The current clip.
     mask: Option<mask::Mask<H>>,
@@ -225,7 +230,8 @@ struct RenderState<H: HasContext + ?Sized> {
 impl<H: HasContext + ?Sized> Default for RenderState<H> {
     fn default() -> Self {
         Self {
-            transform: Affine::IDENTITY,
+            gl_transform: Affine::IDENTITY,
+            pixel_transform: Affine::IDENTITY,
             mask: None,
         }
     }
@@ -255,7 +261,8 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
             tolerance: 5.0,
             default_transform,
             state: TinyVec::from([RenderState {
-                transform: default_transform,
+                gl_transform: default_transform,
+                pixel_transform: Affine::IDENTITY,
                 mask: None,
             }]),
             last_error: Ok(()),
@@ -286,7 +293,7 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
     fn fill_impl(
         &mut self,
         shape: impl Shape,
-        brush: Option<&Brush<H>>,
+        brush: &Brush<H>,
         fill_rule: FillRule,
         mask: Option<&brush::Mask<'_, H>>,
     ) {
@@ -315,16 +322,13 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
         self.render_buffers(brush, mask);
     }
 
-    fn render_buffers(&mut self, brush: Option<&Brush<H>>, mask: Option<&brush::Mask<'_, H>>) {
+    fn render_buffers(&mut self, brush: &Brush<H>, mask: Option<&brush::Mask<'_, H>>) {
         // Activate the program for this brush.
         let program = self.gl.shader_cache.with_target(
             &self.gl.context,
             self.gl.version,
-            match brush {
-                Some(brush) => brush::Target::Surface(brush),
-                None => brush::Target::Framebuffer,
-            },
-            &self.state.last().unwrap().transform,
+            brush,
+            &self.state.last().unwrap().gl_transform,
             mask,
         );
 
@@ -444,19 +448,21 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
 
         // Render the buffers to the screen.
         let brush = brush.make_brush(self, self.bbox(&shape));
-        let restore = RestoreMask::new(self);
+        let mut restore = RestoreMask::new(self);
+        restore.update_texture();
         restore.context.render_buffers(
-            Some(brush.as_ref()),
+            brush.as_ref(),
             restore.mask.as_ref().map(|s| s.as_brush_mask()).as_ref(),
         );
     }
 
     fn fill(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
         let brush = brush.make_brush(self, self.bbox(&shape));
-        let restore = RestoreMask::new(self);
+        let mut restore = RestoreMask::new(self);
+        restore.update_texture();
         restore.context.fill_impl(
             shape,
-            Some(brush.as_ref()),
+            brush.as_ref(),
             FillRule::NonZero,
             restore.mask.as_ref().map(|s| s.as_brush_mask()).as_ref(),
         );
@@ -464,45 +470,34 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
 
     fn fill_even_odd(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
         let brush = brush.make_brush(self, self.bbox(&shape));
-        let restore = RestoreMask::new(self);
+        let mut restore = RestoreMask::new(self);
+        restore.update_texture();
         restore.context.fill_impl(
             shape,
-            Some(brush.as_ref()),
+            brush.as_ref(),
             FillRule::EvenOdd,
             restore.mask.as_ref().map(|s| s.as_brush_mask()).as_ref(),
         );
     }
 
     fn clip(&mut self, shape: impl Shape) {
-        let mask = self
-            .current_state_mut()
+        let context = self.gl.context.clone();
+        let tolerance = self.tolerance;
+        let (width, height) = self.size;
+        let transform = self.currrent_state().pixel_transform;
+
+        self.current_state_mut()
             .mask
-            .take()
-            .map(Ok)
-            .unwrap_or_else(|| {
-                mask::Mask::new(
-                    &self.gl.context,
-                    self.size.0,
-                    self.size.1,
-                    self.default_transform,
-                )
-            });
-
-        let mask = match mask {
-            Ok(mask) => mask,
-            Err(e) => {
-                self.last_error = Err(e);
-                return;
-            }
-        };
-
-        let mut restore = RestoreMask {
-            context: self,
-            mask: Some(mask),
-        };
-        restore
-            .context
-            .draw_to_mask(restore.mask.as_mut().unwrap(), shape)
+            .get_or_insert_with(|| {
+                match mask::Mask::new(&context, width, height, transform) {
+                    Ok(mask) => mask,
+                    Err(e) => {
+                        // TODO
+                        panic!("Failed to create mask: {:?}", e);
+                    }
+                }
+            })
+            .add_path(shape, tolerance);
     }
 
     fn text(&mut self) -> &mut Self::Text {
@@ -516,7 +511,8 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
     fn save(&mut self) -> Result<(), Error> {
         // Add a new state to the stack.
         self.state.push(RenderState {
-            transform: self.default_transform,
+            gl_transform: self.default_transform,
+            pixel_transform: Affine::IDENTITY,
             mask: None,
         });
         Ok(())
@@ -542,7 +538,7 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
     }
 
     fn transform(&mut self, transform: Affine) {
-        self.current_state_mut().transform *= transform;
+        self.current_state_mut().gl_transform *= transform;
     }
 
     fn make_image(
@@ -583,7 +579,7 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
     }
 
     fn current_transform(&self) -> Affine {
-        self.currrent_state().transform
+        self.currrent_state().gl_transform
     }
 }
 
@@ -598,8 +594,10 @@ impl<'a, 'b, H: HasContext + ?Sized> RestoreMask<'a, 'b, H> {
         Self { context, mask }
     }
 
-    fn mask(&self) -> Option<brush::Mask<'_, H>> {
-        self.mask.as_ref().map(|s| s.as_brush_mask())
+    fn update_texture(&mut self) {
+        if let Some(mask) = self.mask.as_mut() {
+            mask.update_texture();
+        }
     }
 }
 

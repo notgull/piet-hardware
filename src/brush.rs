@@ -138,7 +138,6 @@ pub(super) struct Mask<'a, H: HasContext + ?Sized> {
 /// The type of input for a shader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum InputType {
-    Empty,
     Solid,
     Linear,
     Radial,
@@ -158,23 +157,6 @@ struct ShaderKey {
     input_type: InputType,
     mask_type: MaskType,
     write_to_mask: bool,
-}
-
-pub(super) enum Target<'a, H: HasContext + ?Sized> {
-    /// Draw to the surface, using the given brush.
-    Surface(&'a Brush<H>),
-
-    /// Draw to a framebuffer, using the empty brush.
-    Framebuffer,
-}
-
-impl<H: HasContext + ?Sized> Target<'_, H> {
-    fn input_type(&self) -> InputType {
-        match self {
-            Target::Surface(brush) => brush.input_type(),
-            Target::Framebuffer => InputType::Empty,
-        }
-    }
 }
 
 /// A cache for brush-related shaders.
@@ -198,14 +180,11 @@ impl<H: HasContext + ?Sized> Brushes<H> {
         &mut self,
         context: &Rc<H>,
         version: GlVersion,
-        brush: Target<'_, H>,
+        brush: &Brush<H>,
         mvp: &Affine,
         mask: Option<&Mask<'_, H>>,
     ) -> Result<BoundProgram<'_, H>, Error> {
-        let shader = match brush {
-            Target::Surface(brush) => self.shader_for_brush(context, version, brush, mask)?,
-            Target::Framebuffer => self.shader_for_empty(context, version, mask)?,
-        };
+        let shader = self.shader_for_brush(context, version, brush, mask)?;
 
         // Get location for the uniforms we use.
         let mvp_uniform = shader.uniform_location(MVP)?.clone();
@@ -238,7 +217,7 @@ impl<H: HasContext + ?Sized> Brushes<H> {
         }
 
         // Set the solid color.
-        if let (Some(solid_color_uniform), Target::Surface(Brush(BrushInner::Solid(color)))) =
+        if let (Some(solid_color_uniform), Brush(BrushInner::Solid(color))) =
             (solid_color_uniform, &brush)
         {
             program.register_color(&solid_color_uniform, *color);
@@ -264,26 +243,6 @@ impl<H: HasContext + ?Sized> Brushes<H> {
                 MaskType::NoMask
             },
             false,
-        )
-    }
-
-    /// Fetch or create the shader program that just emits black.
-    fn shader_for_empty(
-        &mut self,
-        context: &Rc<H>,
-        version: GlVersion,
-        mask: Option<&Mask<'_, H>>,
-    ) -> Result<&mut Program<H>, Error> {
-        self.fetch_or_create_shader(
-            context,
-            version,
-            InputType::Empty,
-            if mask.is_some() {
-                MaskType::Texture
-            } else {
-                MaskType::NoMask
-            },
-            true,
         )
     }
 
@@ -456,26 +415,10 @@ impl FragmentBuilder {
     /// Use with the provided input type.
     fn with_input_type(&mut self, ty: InputType) -> &mut Self {
         match ty {
-            InputType::Empty => self.with_empty_color(),
             InputType::Solid => self.with_solid_color(),
             InputType::Linear => self.with_linear_gradient(),
             _ => todo!(),
         }
-    }
-
-    /// Use an empty color.
-    fn with_empty_color(&mut self) -> &mut Self {
-        writeln!(
-            self.source,
-            "
-            vec4 {GET_COLOR}() {{
-                return vec4(0, 0, 0, 1);
-            }}
-        "
-        )
-        .ok();
-
-        self
     }
 
     /// Use a solid color.

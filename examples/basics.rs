@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         render_context.clear(None, piet::Color::rgb8(0x87, 0xce, 0xeb));
 
         // Add a clip.
-        render_context.clip(Rect::new(0.0, 0.0, 400.0, 400.0));
+        render_context.clip(Rect::new(0.0, 0.0, 100.0, 100.0));
 
         let red_star = {
             let rot = (tick % 360) as f64 / 180.0 * std::f64::consts::PI;
