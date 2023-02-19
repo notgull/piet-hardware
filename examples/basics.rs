@@ -1,3 +1,20 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later OR MPL-2.0
+// This file is a part of `piet-glow`.
+//
+// `piet-glow` is free software: you can redistribute it and/or modify it under the terms of
+// either:
+//
+// * GNU Lesser General Public License as published by the Free Software Foundation, either
+// version 3 of the License, or (at your option) any later version.
+// * Mozilla Public License as published by the Mozilla Foundation, version 2.
+//
+// `piet-glow` is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+// without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+// See the GNU Lesser General Public License or the Mozilla Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License and the Mozilla
+// Public License along with `piet-glow`. If not, see <https://www.gnu.org/licenses/>.
+
 //! An example with a basic usage of the library.
 
 include!("util/setup_context.rs");
@@ -8,7 +25,7 @@ use piet::RenderContext as _;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A path representing a star.
     let path = generate_five_pointed_star(Point::new(0.0, 0.0), 75.0, 150.0);
-    let circle_path = Circle::new(Point::new(200.0, 200.0), 150.0);
+    let _circle_path = Circle::new(Point::new(200.0, 200.0), 150.0);
     let mut tick = 0;
 
     util::with_renderer(move |render_context| {

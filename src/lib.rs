@@ -1,4 +1,19 @@
-// This file is dual licensed under the MIT and Apache 2.0 licenses.
+// SPDX-License-Identifier: LGPL-3.0-or-later OR MPL-2.0
+// This file is a part of `piet-glow`.
+//
+// `piet-glow` is free software: you can redistribute it and/or modify it under the terms of
+// either:
+//
+// * GNU Lesser General Public License as published by the Free Software Foundation, either
+// version 3 of the License, or (at your option) any later version.
+// * Mozilla Public License as published by the Mozilla Foundation, version 2.
+//
+// `piet-glow` is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+// without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+// See the GNU Lesser General Public License or the Mozilla Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License and the Mozilla
+// Public License along with `piet-glow`. If not, see <https://www.gnu.org/licenses/>.
 
 //! Creates a [`piet`] rendering context for an OpenGL context.
 //!
@@ -27,23 +42,26 @@ use tinyvec::TinyVec;
 use lyon_tessellation::path::geom::euclid::default::Point2D;
 use lyon_tessellation::path::PathEvent;
 use lyon_tessellation::{
-    BuffersBuilder, FillOptions, FillRule, FillTessellator, FillVertex, LineCap, LineJoin,
-    StrokeOptions, StrokeTessellator, StrokeVertex, VertexBuffers,
+    BuffersBuilder, FillOptions, FillRule, FillTessellator, FillVertex, LineCap, StrokeOptions,
+    StrokeTessellator, StrokeVertex, VertexBuffers,
 };
 
-use piet::kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape, Size, Vec2};
+use piet::kurbo::{Affine, PathEl, Point, Rect, Shape, Size, Vec2};
 use piet::{
-    Error, FixedGradient, FontFamily, HitTestPoint, HitTestPosition, ImageFormat,
-    InterpolationMode, IntoBrush, LineCap as PietLineCap, LineMetric, StrokeStyle, TextAlignment,
-    TextAttribute,
+    Error, FixedGradient, ImageFormat, InterpolationMode, IntoBrush, LineCap as PietLineCap,
+    StrokeStyle,
 };
 
 use std::mem;
-use std::ops::RangeBounds;
+
 use std::rc::Rc;
 
+pub use piet_cosmic_text;
+
+#[doc(inline)]
+pub use piet_cosmic_text::{Text, TextLayout, TextLayoutBuilder};
+
 pub use brush::Brush;
-pub use text::{Text, TextLayout, TextLayoutBuilder};
 
 /// The OpenGL version that is required.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -491,7 +509,7 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
         &mut self.gl.text
     }
 
-    fn draw_text(&mut self, layout: &Self::TextLayout, pos: impl Into<Point>) {
+    fn draw_text(&mut self, _layout: &Self::TextLayout, _pos: impl Into<Point>) {
         todo!()
     }
 
@@ -539,19 +557,19 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
 
     fn draw_image(
         &mut self,
-        image: &Self::Image,
-        dst_rect: impl Into<Rect>,
-        interp: InterpolationMode,
+        _image: &Self::Image,
+        _dst_rect: impl Into<Rect>,
+        _interp: InterpolationMode,
     ) {
         todo!()
     }
 
     fn draw_image_area(
         &mut self,
-        image: &Self::Image,
-        src_rect: impl Into<Rect>,
-        dst_rect: impl Into<Rect>,
-        interp: InterpolationMode,
+        _image: &Self::Image,
+        _src_rect: impl Into<Rect>,
+        _dst_rect: impl Into<Rect>,
+        _interp: InterpolationMode,
     ) {
         todo!()
     }
