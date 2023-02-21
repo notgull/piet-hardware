@@ -253,6 +253,8 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
 
         unsafe {
             gl.context.viewport(0, 0, width as i32, height as i32);
+            gl.context.enable(glow::BLEND);
+            gl.context.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
         }
 
         Self {
@@ -262,7 +264,7 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
             default_transform,
             state: TinyVec::from([RenderState {
                 gl_transform: default_transform,
-                pixel_transform: Affine::IDENTITY,
+                pixel_transform: default_transform.inverse(),
                 mask: None,
             }]),
             last_error: Ok(()),
@@ -457,6 +459,8 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
     }
 
     fn fill(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
+        println!("pt: {:?}", self.currrent_state().pixel_transform);
+
         let brush = brush.make_brush(self, self.bbox(&shape));
         let mut restore = RestoreMask::new(self);
         restore.update_texture();
@@ -539,6 +543,7 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
 
     fn transform(&mut self, transform: Affine) {
         self.current_state_mut().gl_transform *= transform;
+        self.current_state_mut().pixel_transform *= transform;
     }
 
     fn make_image(

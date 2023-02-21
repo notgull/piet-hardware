@@ -51,6 +51,10 @@ const MASK_MVP: &str = "maskMvp";
 const MASK_COORDS: &str = "maskCoords";
 const TEXTURE_MASK: &str = "textureMask";
 
+const TEXTURE: &str = "texture";
+const TEXTURE_MVP: &str = "textureMvp";
+const TEX_COORDS: &str = "texCoords";
+
 const GET_COLOR: &str = "getColor";
 const GET_MASK_ALPHA: &str = "getMaskAlpha";
 const GET_GRADIENT_COORD: &str = "getGradientCoord";
@@ -73,8 +77,8 @@ enum BrushInner<H: HasContext + ?Sized> {
         /// The texture.
         texture: Texture<H>,
 
-        /// The destination rectangle.
-        dest: Rect,
+        /// The matrix mapping the destination rectangle to the source rectangle.
+        dst_to_src: Affine,
     },
 }
 
@@ -84,9 +88,12 @@ impl<H: HasContext + ?Sized> Clone for Brush<H> {
             BrushInner::Solid(color) => Brush::solid(*color),
             BrushInner::LinearGradient(gradient) => Brush::linear_gradient(gradient.clone()),
             BrushInner::RadialGradient(gradient) => Brush::radial_gradient(gradient.clone()),
-            BrushInner::Texture { texture, dest } => Brush(BrushInner::Texture {
+            BrushInner::Texture {
+                texture,
+                dst_to_src,
+            } => Brush(BrushInner::Texture {
                 texture: texture.clone(),
-                dest: *dest,
+                dst_to_src: *dst_to_src,
             }),
         }
     }
@@ -267,6 +274,7 @@ impl<H: HasContext + ?Sized> Brushes<H> {
             Entry::Vacant(entry) => {
                 // Create a new shader and insert it into the cache.
                 let vertex = VertexBuilder::new(version)
+                    .with_input_type(input_type)
                     .with_mask(mask_type)
                     .to_shader(context)?;
 
@@ -340,6 +348,22 @@ impl VertexBuilder {
         self
     }
 
+    /// Use a specific texture as the input.
+    fn with_input_type(&mut self, input_type: InputType) -> &mut Self {
+        match input_type {
+            InputType::Texture => self.with_texture_input(),
+            _ => self,
+        }
+    }
+
+    /// Adds a texture input.
+    fn with_texture_input(&mut self) -> &mut Self {
+        self.textured_input = true;
+        writeln!(self.source, "out vec2 {TEX_COORDS};").unwrap();
+        writeln!(self.source, "uniform mat3 {TEXTURE_MVP};").unwrap();
+        self
+    }
+
     /// Build the shader source.
     fn to_source(&mut self) -> String {
         let mut source = mem::take(&mut self.source);
@@ -349,11 +373,20 @@ impl VertexBuilder {
         writeln!(
             source,
             "    
-                vec2 finalPosition = (mvp * vec3({IN_POSITION}, 1.0)).xy; 
+                vec2 finalPosition = ({MVP} * vec3({IN_POSITION}, 1.0)).xy; 
                 gl_Position = vec4(finalPosition.x, -finalPosition.y, 0.0, 1.0);
             "
         )
         .unwrap();
+
+        if self.textured_input {
+            // Set up tex coords.
+            writeln!(
+                source,
+                "    {TEX_COORDS} = ({TEXTURE_MVP} * vec3({IN_POSITION}, 1.0)).xy;"
+            )
+            .unwrap();
+        }
 
         if self.textured_mask {
             // Set up tex coords.
@@ -438,6 +471,24 @@ impl FragmentBuilder {
         self
     }
 
+    /// Use a texture input.
+    fn with_texture_input(&mut self) -> &mut Self {
+        writeln!(
+            self.source,
+            "
+            uniform sampler2D {TEXTURE};
+            in vec2 {TEX_COORDS};
+
+            vec4 {GET_COLOR}() {{
+                return texture2D({TEXTURE}, {TEX_COORDS});
+            }}
+        "
+        )
+        .ok();
+
+        self
+    }
+
     /// Use with a linear gradient.
     fn with_linear_gradient(&mut self) -> &mut Self {
         writeln!(
@@ -486,10 +537,12 @@ impl FragmentBuilder {
             self.source,
             "
             in vec2 {MASK_COORDS};
+            uniform mat3 {MASK_MVP};
             uniform sampler2D {TEXTURE_MASK};
 
             float {GET_MASK_ALPHA}() {{
-                return texture2D({TEXTURE_MASK}, {MASK_COORDS}).a; 
+                vec2 coords = ({MASK_MVP} * vec3(gl_FragCoord.xy, 1.0)).xy;
+                return texture2D({TEXTURE_MASK}, coords).r; 
             }}
         "
         )
@@ -527,7 +580,12 @@ impl FragmentBuilder {
             source,
             "
             void main() {{
-                {color_output} = ({GET_COLOR}() * {GET_MASK_ALPHA}());
+                vec4 colorOutput = {GET_COLOR}();
+                float alphaMask = {GET_MASK_ALPHA}();
+                colorOutput.a *= alphaMask;
+
+                // Multiply with existing color.
+                {color_output} = colorOutput;
             }}
             ",
         )

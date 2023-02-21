@@ -310,6 +310,23 @@ impl<H: HasContext + ?Sized> Texture<H> {
                 Error::BackendError(err.into())
             })?;
 
+            // Set wrap to GL_CLAMP_TO_BORDER and border color to transparent.
+            context.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_BORDER as i32,
+            );
+            context.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_BORDER as i32,
+            );
+            context.tex_parameter_f32_slice(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_BORDER_COLOR,
+                &[0.0, 0.0, 0.0, 0.0],
+            );
+
             Ok(Self {
                 context: context.clone(),
                 id,
@@ -532,6 +549,73 @@ impl<H: HasContext + ?Sized> BoundTexture<'_, H> {
             );
         }
     }
+
+/*
+    /// Dump the contents of the texture to the disk.
+    ///
+    /// When uncommenting this procedure, re-enable the "image" crate.
+    pub(crate) unsafe fn dump_to_disk(
+        &mut self,
+        path: &std::path::Path,
+        width: u32,
+        height: u32,
+        format: ImageFormat,
+    ) {
+        let mut bpp = match format {
+            ImageFormat::Grayscale => 1,
+            ImageFormat::Rgb => 3,
+            ImageFormat::RgbaSeparate | ImageFormat::RgbaPremul => 4,
+            _ => panic!("Unsupported format"),
+        };
+
+        let mut data = vec![0u8; (width * height * bpp) as usize];
+
+        self.context.get_tex_image(
+            glow::TEXTURE_2D,
+            0,
+            match format {
+                ImageFormat::Grayscale => glow::RED,
+                ImageFormat::Rgb => glow::RGB,
+                ImageFormat::RgbaSeparate | ImageFormat::RgbaPremul => glow::RGBA,
+                _ => panic!("Unsupported format"),
+            },
+            glow::UNSIGNED_BYTE,
+            glow::PixelPackData::Slice(&mut data),
+        );
+
+        // Create an image from the data.
+        let mut img = image::ImageBuffer::new(width, height);
+
+        // Copy the data into the image.
+        for (x, y, pixel) in img.enumerate_pixels_mut() {
+            let offset = (y * width + x) as usize * bpp as usize;
+
+            *pixel = match format {
+                ImageFormat::Grayscale => {
+                    let v = data[offset];
+                    image::Rgba([v, v, v, 255])
+                }
+                ImageFormat::Rgb => {
+                    let r = data[offset];
+                    let g = data[offset + 1];
+                    let b = data[offset + 2];
+                    image::Rgba([r, g, b, 255])
+                }
+                ImageFormat::RgbaSeparate | ImageFormat::RgbaPremul => {
+                    let r = data[offset];
+                    let g = data[offset + 1];
+                    let b = data[offset + 2];
+                    let a = data[offset + 3];
+                    image::Rgba([r, g, b, a])
+                }
+                _ => panic!("Unsupported format"),
+            };
+        }
+
+        // Save the image.
+        img.save(path).unwrap();
+    }
+*/
 }
 
 /// An object representing a framebuffer bound to GL_FRAMEBUFFER.

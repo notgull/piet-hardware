@@ -24,8 +24,8 @@ use piet::RenderContext as _;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A path representing a star.
-    let path = generate_five_pointed_star(Point::new(0.0, 0.0), 75.0, 150.0);
-    let _circle_path = Circle::new(Point::new(200.0, 200.0), 150.0);
+    let star = generate_five_pointed_star(Point::new(0.0, 0.0), 75.0, 150.0);
+    let circle_path = Circle::new(Point::new(200.0, 200.0), 150.0);
     let mut tick = 0;
 
     util::with_renderer(move |render_context| {
@@ -33,16 +33,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         render_context.clear(None, piet::Color::rgb8(0x87, 0xce, 0xeb));
 
         // Add a clip.
-        render_context.clip(Rect::new(0.0, 0.0, 100.0, 100.0));
+        render_context.clip(circle_path);
 
         let red_star = {
             let rot = (tick % 360) as f64 / 180.0 * std::f64::consts::PI;
             let transform = Affine::translate((200.0, 200.0)) * Affine::rotate(rot);
-            transform * (&path)
+            transform * (&star)
         };
 
         // Draw a solid red using the path.
         let solid_red = render_context.solid_brush(piet::Color::rgb8(0xff, 0x00, 0x00));
+        render_context.fill(Rect::new(0.0, 0.0, 200.0, 200.0), &solid_red);
         render_context.fill(&red_star, &solid_red);
 
         // Draw a black outline using the path.
@@ -58,8 +59,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let solid = rc.solid_brush(piet::Color::rgb8(0x00, 0xff, 0x00));
 
                 rc.transform(trans);
-                rc.fill(&path, &solid);
-                rc.stroke(&path, &outline, 5.0);
+                rc.fill(&star, &solid);
+                rc.stroke(&star, &outline, 5.0);
 
                 Ok(())
             })
