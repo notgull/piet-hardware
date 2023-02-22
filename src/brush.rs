@@ -43,6 +43,7 @@ const GRADIENT_COLORS: &str = "gradientColors";
 const GRADIENT_STOPS: &str = "gradientStops";
 
 const MVP: &str = "mvp";
+const MVP_INVERSE: &str = "mvpInverse";
 const SOLID_COLOR: &str = "solidColor";
 const SRC_SIZE: &str = "srcSize";
 const DST_RECT: &str = "dstRect";
@@ -52,7 +53,7 @@ const MASK_COORDS: &str = "maskCoords";
 const TEXTURE_MASK: &str = "textureMask";
 
 const TEXTURE: &str = "texture";
-const TEXTURE_MVP: &str = "textureMvp";
+const TEXTURE_REVERSE_TRANSFORM: &str = "textureRevTransform";
 const TEX_COORDS: &str = "texCoords";
 
 const GET_COLOR: &str = "getColor";
@@ -118,7 +119,26 @@ impl<H: HasContext + ?Sized> Brush<H> {
         dst: Rect,
         mode: InterpolationMode,
     ) -> Self {
-        todo!()
+        // Transforming from "dst" to "src" involves:
+        // - translating by -dst.x0, -dst.y0
+        // - scaling by src.width / dst.width, src.height / dst.height
+        // - translating by src.x0, src.y0
+
+        let translate1 = Affine::translate((-dst.x0, -dst.y0));
+        let scale =
+            Affine::scale_non_uniform(src.width() / dst.width(), src.height() / dst.height());
+        let translate2 = Affine::translate((src.x0, src.y0));
+
+        // Now, compose the transforms in reverse order.
+        let dst_to_src = translate2 * scale * translate1;
+
+        // TODO: Handle interpolation mode.
+        let _ = mode;
+
+        Brush(BrushInner::Texture {
+            texture: image.texture.clone(),
+            dst_to_src,
+        })
     }
 
     fn input_type(&self) -> InputType {
@@ -217,6 +237,15 @@ impl<H: HasContext + ?Sized> Brushes<H> {
         } else {
             None
         };
+        let textured_uniforms = if matches!(brush.input_type(), InputType::Texture) {
+            Some((
+                shader.uniform_location(TEXTURE)?.clone(),
+                shader.uniform_location(TEXTURE_REVERSE_TRANSFORM)?.clone(),
+                shader.uniform_location(MVP_INVERSE)?.clone(),
+            ))
+        } else {
+            None
+        };
 
         let program = shader.bind();
 
@@ -237,6 +266,27 @@ impl<H: HasContext + ?Sized> Brushes<H> {
             (solid_color_uniform, &brush)
         {
             program.register_color(&solid_color_uniform, *color);
+        }
+
+        // Set the image transforms.
+        if let (
+            Some((texture_uniform, texture_reverse_transform_uniform, mvp_inverse_transform)),
+            Brush(BrushInner::Texture {
+                texture,
+                dst_to_src,
+            }),
+        ) = (textured_uniforms, &brush)
+        {
+            {
+                let mut bound = texture.bind(Some(0));
+                program.register_texture(&texture_uniform, &mut bound);
+            }
+
+            let dst_to_src = dst_to_src.inverse();
+            program.register_mat3(&texture_reverse_transform_uniform, &dst_to_src);
+
+            let mvp_inverse = mvp.inverse();
+            program.register_mat3(&mvp_inverse_transform, &mvp_inverse);
         }
 
         Ok(program)
@@ -283,7 +333,6 @@ impl<H: HasContext + ?Sized> Brushes<H> {
             Entry::Vacant(entry) => {
                 // Create a new shader and insert it into the cache.
                 let vertex = VertexBuilder::new(version)
-                    .with_input_type(input_type)
                     .with_mask(mask_type)
                     .to_shader(context)?;
 
@@ -357,22 +406,6 @@ impl VertexBuilder {
         self
     }
 
-    /// Use a specific texture as the input.
-    fn with_input_type(&mut self, input_type: InputType) -> &mut Self {
-        match input_type {
-            InputType::Texture => self.with_texture_input(),
-            _ => self,
-        }
-    }
-
-    /// Adds a texture input.
-    fn with_texture_input(&mut self) -> &mut Self {
-        self.textured_input = true;
-        writeln!(self.source, "out vec2 {TEX_COORDS};").unwrap();
-        writeln!(self.source, "uniform mat3 {TEXTURE_MVP};").unwrap();
-        self
-    }
-
     /// Build the shader source.
     fn to_source(&mut self) -> String {
         let mut source = mem::take(&mut self.source);
@@ -387,15 +420,6 @@ impl VertexBuilder {
             "
         )
         .unwrap();
-
-        if self.textured_input {
-            // Set up tex coords.
-            writeln!(
-                source,
-                "    {TEX_COORDS} = ({TEXTURE_MVP} * vec3({IN_POSITION}, 1.0)).xy;"
-            )
-            .unwrap();
-        }
 
         if self.textured_mask {
             // Set up tex coords.
@@ -459,6 +483,7 @@ impl FragmentBuilder {
         match ty {
             InputType::Solid => self.with_solid_color(),
             InputType::Linear => self.with_linear_gradient(),
+            InputType::Texture => self.with_texture_input(),
             _ => todo!(),
         }
     }
@@ -486,10 +511,14 @@ impl FragmentBuilder {
             self.source,
             "
             uniform sampler2D {TEXTURE};
-            in vec2 {TEX_COORDS};
+            uniform mat3 {TEXTURE_REVERSE_TRANSFORM};
+            uniform mat3 {MVP_INVERSE};
 
             vec4 {GET_COLOR}() {{
-                return texture2D({TEXTURE}, {TEX_COORDS});
+                // Get the original coords in texture space.
+                vec2 textureCoords = ({MVP_INVERSE} * {TEXTURE_REVERSE_TRANSFORM} * gl_FragCoord.xyz).xy;
+
+                return texture2D({TEXTURE}, textureCoords);
             }}
         "
         )

@@ -23,7 +23,7 @@ use piet::kurbo::Affine;
 use piet::ImageFormat;
 
 use std::collections::hash_map::{Entry, HashMap};
-use std::fmt;
+use std::fmt::{self, Write};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -217,7 +217,15 @@ impl<H: HasContext + ?Sized, Ty: ShaderType> Shader<H, Ty> {
                 })
             } else {
                 let err = context.get_shader_info_log(id);
-                Err(Error::BackendError(err.into()))
+
+                Err(Error::BackendError(
+                    ShaderError {
+                        error_msg: err,
+                        source_code: source.to_string(),
+                        shader_ty: Ty::name(),
+                    }
+                    .into(),
+                ))
             }
         }
     }
@@ -745,6 +753,9 @@ impl<'a, H: HasContext + ?Sized> BoundVertexBuffer<'a, H> {
 pub(super) unsafe trait ShaderType {
     /// The shader type.
     const TYPE: u32;
+
+    /// Debugging name.
+    fn name() -> &'static str;
 }
 
 /// Vertex shader.
@@ -752,6 +763,10 @@ pub(super) struct Vertex;
 
 unsafe impl ShaderType for Vertex {
     const TYPE: u32 = glow::VERTEX_SHADER;
+
+    fn name() -> &'static str {
+        "vertex"
+    }
 }
 
 /// Fragment shader.
@@ -759,6 +774,10 @@ pub(super) struct Fragment;
 
 unsafe impl ShaderType for Fragment {
     const TYPE: u32 = glow::FRAGMENT_SHADER;
+
+    fn name() -> &'static str {
+        "fragment"
+    }
 }
 
 /// Convert an `Affine` to an OpenGL matrix.
@@ -772,6 +791,50 @@ fn affine_to_gl_matrix(aff: &Affine) -> [f32; 9] {
     let [a, b, c, d, e, f] = aff.as_coeffs();
     [f!(a), f!(b), 0.0, f!(c), f!(d), 0.0, f!(e), f!(f), 1.0]
 }
+
+struct ShaderError {
+    error_msg: String,
+    source_code: String,
+    shader_ty: &'static str,
+}
+
+impl fmt::Debug for ShaderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "Failed to compile the {} shader: {}",
+            self.shader_ty, self.error_msg
+        )?;
+
+        if !self.source_code.is_empty() {
+            writeln!(f, "Source code:")?;
+
+            // Print a line as long as our longest line.
+            let max_len = self.source_code.lines().map(|l| l.len()).max().unwrap_or(0);
+
+            for _ in 0..max_len {
+                f.write_char('-')?;
+            }
+
+            f.write_char('\n');
+
+            // Print soure along with line numbers.
+            for (i, line) in self.source_code.lines().enumerate() {
+                writeln!(f, "{:>4} | {}", i + 1, line)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl fmt::Display for ShaderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for ShaderError {}
 
 struct CallOnDrop<F: FnMut()>(F);
 

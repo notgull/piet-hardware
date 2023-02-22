@@ -22,11 +22,22 @@ include!("util/setup_context.rs");
 use piet::kurbo::{Affine, BezPath, Circle, Point, Rect};
 use piet::RenderContext as _;
 
+use std::path::Path;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A path representing a star.
     let star = generate_five_pointed_star(Point::new(0.0, 0.0), 75.0, 150.0);
     let circle_path = Circle::new(Point::new(200.0, 200.0), 150.0);
     let mut tick = 0;
+
+    // Get the test image at $CRATE_ROOT/examples/assets/test-image.png
+    let manifest_root = env!("CARGO_MANIFEST_DIR");
+    let path = Path::new(manifest_root).join("examples/assets/test-image.png");
+    let image = image::open(path)?.to_rgba8();
+
+    // Convert the image to a byte buffer.
+    let size = image.dimensions();
+    let image_data = image.into_raw();
 
     util::with_renderer(move |render_context, width, height| {
         // Clear the screen to a light blue.
@@ -66,9 +77,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .unwrap();
 
+        // Create an image and draw it.
+        let image = render_context
+            .make_image(
+                size.0 as _,
+                size.1 as _,
+                &image_data,
+                piet::ImageFormat::RgbaSeparate,
+            )
+            .unwrap();
+        render_context.draw_image(
+            &image,
+            Rect::new(400.0, 400.0, 550.0, 550.0),
+            piet::InterpolationMode::Bilinear,
+        );
+
         // Panic on any errors.
         render_context.finish().unwrap();
-        render_context.status().unwrap();
+        render_context.status().unwrap(); 
 
         tick += 1;
     })

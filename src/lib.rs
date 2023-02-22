@@ -293,13 +293,7 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
         self.state.last_mut().unwrap()
     }
 
-    fn fill_impl(
-        &mut self,
-        shape: impl Shape,
-        brush: &Brush<H>,
-        fill_rule: FillRule,
-        mask: Option<&brush::Mask<'_, H>>,
-    ) {
+    fn fill_impl(&mut self, shape: impl Shape, brush: &Brush<H>, fill_rule: FillRule) {
         // Convert the kurbo shape to a lyon path iterator.
         let path_events = convert_path(shape.path_elements(self.tolerance));
 
@@ -322,17 +316,54 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
             return;
         }
 
-        self.render_buffers(brush, mask);
+        self.render_buffers(brush);
     }
 
-    fn render_buffers(&mut self, brush: &Brush<H>, mask: Option<&brush::Mask<'_, H>>) {
+    fn fill_rect(&mut self, rect: Rect, brush: &Brush<H>) {
+        // Get the vertices and indices for the rectangle.
+        const INDICES: &[u32] = &[0, 1, 2, 0, 2, 3];
+        let vertices = [
+            Point2D::new(rect.x0 as f32, rect.y0 as f32),
+            Point2D::new(rect.x1 as f32, rect.y0 as f32),
+            Point2D::new(rect.x1 as f32, rect.y1 as f32),
+            Point2D::new(rect.x0 as f32, rect.y1 as f32),
+        ];
+
+        // Fill the buffers with them.
+        self.gl.buffers.vertex_buffer.vertices.clear();
+        self.gl.buffers.vertex_buffer.indices.clear();
+        self.gl
+            .buffers
+            .vertex_buffer
+            .vertices
+            .extend_from_slice(&vertices);
+        self.gl
+            .buffers
+            .vertex_buffer
+            .indices
+            .extend_from_slice(INDICES);
+
+        self.render_buffers(brush);
+    }
+
+    fn render_buffers(&mut self, brush: &Brush<H>) {
+        // Get a mask.
+        let state = self.state.last_mut().unwrap();
+        let RenderState {
+            gl_transform, mask, ..
+        } = state;
+
+        if let Some(mask) = mask.as_mut() {
+            mask.update_texture();
+        }
+
         // Activate the program for this brush.
         let program = self.gl.shader_cache.with_target(
             &self.gl.context,
             self.gl.version,
             brush,
-            &self.state.last().unwrap().gl_transform,
-            mask,
+            gl_transform,
+            mask.as_mut().map(|m| m.as_brush_mask()).as_ref(),
         );
 
         // Upload the vertex data.
@@ -387,7 +418,7 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
                 None => Rect::new(0.0, 0.0, self.size.0 as f64, self.size.1 as f64),
             };
 
-            self.fill(rect, &brush);
+            self.fill_rect(rect, &brush);
         }
 
         let (r, g, b, a) = color.as_rgba();
@@ -451,36 +482,17 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
 
         // Render the buffers to the screen.
         let brush = brush.make_brush(self, self.bbox(&shape));
-        let mut restore = RestoreMask::new(self);
-        restore.update_texture();
-        restore.context.render_buffers(
-            brush.as_ref(),
-            restore.mask.as_ref().map(|s| s.as_brush_mask()).as_ref(),
-        );
+        self.render_buffers(brush.as_ref());
     }
 
     fn fill(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
         let brush = brush.make_brush(self, self.bbox(&shape));
-        let mut restore = RestoreMask::new(self);
-        restore.update_texture();
-        restore.context.fill_impl(
-            shape,
-            brush.as_ref(),
-            FillRule::NonZero,
-            restore.mask.as_ref().map(|s| s.as_brush_mask()).as_ref(),
-        );
+        self.fill_impl(shape, brush.as_ref(), FillRule::NonZero);
     }
 
     fn fill_even_odd(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
         let brush = brush.make_brush(self, self.bbox(&shape));
-        let mut restore = RestoreMask::new(self);
-        restore.update_texture();
-        restore.context.fill_impl(
-            shape,
-            brush.as_ref(),
-            FillRule::EvenOdd,
-            restore.mask.as_ref().map(|s| s.as_brush_mask()).as_ref(),
-        );
+        self.fill_impl(shape, brush.as_ref(), FillRule::EvenOdd);
     }
 
     fn clip(&mut self, shape: impl Shape) {
@@ -561,14 +573,15 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
         dst_rect: impl Into<Rect>,
         interp: InterpolationMode,
     ) {
+        let dst_rect = dst_rect.into();
         let textured_brush = Brush::textured(
             image,
             Rect::new(0.0, 0.0, image.size.width, image.size.height),
-            dst_rect.into(),
+            dst_rect,
             interp,
         );
 
-        todo!()
+        self.fill_rect(dst_rect, &textured_brush);
     }
 
     fn draw_image_area(
@@ -578,14 +591,10 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
         dst_rect: impl Into<Rect>,
         interp: InterpolationMode,
     ) {
-        let textured_brush = Brush::textured(
-            image,
-            Rect::new(0.0, 0.0, image.size.width, image.size.height),
-            dst_rect.into(),
-            interp,
-        );
+        let (src_rect, dst_rect) = (src_rect.into(), dst_rect.into());
+        let textured_brush = Brush::textured(image, src_rect, dst_rect, interp);
 
-        todo!()
+        self.fill_rect(dst_rect, &textured_brush);
     }
 
     fn capture_image_area(&mut self, _src_rect: impl Into<Rect>) -> Result<Self::Image, Error> {
