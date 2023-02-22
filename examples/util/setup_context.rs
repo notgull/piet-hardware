@@ -23,7 +23,7 @@ mod util {
 
     #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
     pub(crate) fn with_renderer(
-        mut f: impl FnMut(&mut RenderContext<'_, glow::Context>) + 'static,
+        mut f: impl FnMut(&mut RenderContext<'_, glow::Context>, u32, u32) + 'static,
     ) -> Result<(), Box<dyn std::error::Error>> {
         use glutin::config::ConfigTemplateBuilder;
         use glutin::context::{ContextApi, ContextAttributesBuilder, Version};
@@ -36,6 +36,7 @@ mod util {
         use raw_window_handle::HasRawWindowHandle;
 
         use std::num::NonZeroU32;
+        use std::time::{Duration, Instant};
 
         use winit::event::{Event, WindowEvent};
         use winit::event_loop::EventLoop;
@@ -115,9 +116,10 @@ mod util {
         let mut renderer = None;
         let mut not_current_gl_context = Some(gl_handler);
         let mut current_size = None;
+        let mut next_render = Instant::now() + Duration::from_millis(16);
 
         event_loop.run(move |event, window_target, control_flow| {
-            control_flow.set_wait();
+            control_flow.set_wait_until(next_render);
             match event {
                 Event::Resumed => {
                     #[cfg(target_os = "android")]
@@ -210,11 +212,12 @@ mod util {
                         let size = current_size.unwrap_or_else(|| window.inner_size());
                         let mut context =
                             unsafe { RenderContext::new(renderer, size.width, size.height) };
-                        f(&mut context);
+                        f(&mut context, size.width, size.height);
 
                         window.request_redraw();
 
                         gl_surface.swap_buffers(gl_context).unwrap();
+                        next_render += Duration::from_millis(17);
                     }
                 }
                 _ => (),

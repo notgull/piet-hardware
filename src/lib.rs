@@ -254,7 +254,8 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
         unsafe {
             gl.context.viewport(0, 0, width as i32, height as i32);
             gl.context.enable(glow::BLEND);
-            gl.context.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            gl.context
+                .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
         }
 
         Self {
@@ -459,8 +460,6 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
     }
 
     fn fill(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
-        println!("pt: {:?}", self.currrent_state().pixel_transform);
-
         let brush = brush.make_brush(self, self.bbox(&shape));
         let mut restore = RestoreMask::new(self);
         restore.update_texture();
@@ -558,20 +557,34 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
 
     fn draw_image(
         &mut self,
-        _image: &Self::Image,
-        _dst_rect: impl Into<Rect>,
-        _interp: InterpolationMode,
+        image: &Self::Image,
+        dst_rect: impl Into<Rect>,
+        interp: InterpolationMode,
     ) {
+        let textured_brush = Brush::textured(
+            image,
+            Rect::new(0.0, 0.0, image.size.width, image.size.height),
+            dst_rect.into(),
+            interp,
+        );
+
         todo!()
     }
 
     fn draw_image_area(
         &mut self,
-        _image: &Self::Image,
-        _src_rect: impl Into<Rect>,
-        _dst_rect: impl Into<Rect>,
-        _interp: InterpolationMode,
+        image: &Self::Image,
+        src_rect: impl Into<Rect>,
+        dst_rect: impl Into<Rect>,
+        interp: InterpolationMode,
     ) {
+        let textured_brush = Brush::textured(
+            image,
+            Rect::new(0.0, 0.0, image.size.width, image.size.height),
+            dst_rect.into(),
+            interp,
+        );
+
         todo!()
     }
 
@@ -615,7 +628,7 @@ impl<H: HasContext + ?Sized> Drop for RestoreMask<'_, '_, H> {
 /// The image type used by the [`RenderContext`].
 pub struct Image<H: HasContext + ?Sized> {
     /// The underlying texture.
-    texture: resources::Texture<H>,
+    texture: Rc<resources::Texture<H>>,
 
     /// The size of the image.
     size: Size,
@@ -659,7 +672,7 @@ impl<H: HasContext + ?Sized> Image<H> {
         }
 
         Ok(Self {
-            texture: tex,
+            texture: Rc::new(tex),
             size: Size::new(width as f64, height as f64),
         })
     }

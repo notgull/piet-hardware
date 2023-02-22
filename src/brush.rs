@@ -24,7 +24,7 @@ use crate::{Error, GlVersion, RenderContext};
 
 use glow::HasContext;
 use piet::kurbo::{Affine, Rect};
-use piet::{FixedLinearGradient, FixedRadialGradient, IntoBrush};
+use piet::{FixedLinearGradient, FixedRadialGradient, InterpolationMode, IntoBrush};
 
 use std::borrow::Cow;
 use std::collections::hash_map::{Entry, HashMap};
@@ -75,7 +75,7 @@ enum BrushInner<H: HasContext + ?Sized> {
     /// A texture.
     Texture {
         /// The texture.
-        texture: Texture<H>,
+        texture: Rc<Texture<H>>,
 
         /// The matrix mapping the destination rectangle to the source rectangle.
         dst_to_src: Affine,
@@ -110,6 +110,15 @@ impl<H: HasContext + ?Sized> Brush<H> {
 
     pub(super) fn radial_gradient(gradient: FixedRadialGradient) -> Self {
         Brush(BrushInner::RadialGradient(gradient))
+    }
+
+    pub(super) fn textured(
+        image: &crate::Image<H>,
+        src: Rect,
+        dst: Rect,
+        mode: InterpolationMode,
+    ) -> Self {
+        todo!()
     }
 
     fn input_type(&self) -> InputType {
@@ -542,7 +551,7 @@ impl FragmentBuilder {
 
             float {GET_MASK_ALPHA}() {{
                 vec2 coords = ({MASK_MVP} * vec3(gl_FragCoord.xy, 1.0)).xy;
-                return texture2D({TEXTURE_MASK}, coords).r; 
+                return texture2D({TEXTURE_MASK}, coords).g; 
             }}
         "
         )

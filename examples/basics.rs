@@ -28,12 +28,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let circle_path = Circle::new(Point::new(200.0, 200.0), 150.0);
     let mut tick = 0;
 
-    util::with_renderer(move |render_context| {
+    util::with_renderer(move |render_context, width, height| {
         // Clear the screen to a light blue.
         render_context.clear(None, piet::Color::rgb8(0x87, 0xce, 0xeb));
 
         // Add a clip.
-        render_context.clip(circle_path);
+        //render_context.clip(circle_path);
 
         let red_star = {
             let rot = (tick % 360) as f64 / 180.0 * std::f64::consts::PI;
