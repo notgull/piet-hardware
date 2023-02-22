@@ -20,7 +20,7 @@
 use crate::Error;
 use glow::HasContext;
 use piet::kurbo::Affine;
-use piet::ImageFormat;
+use piet::{ImageFormat, InterpolationMode};
 
 use std::collections::hash_map::{Entry, HashMap};
 use std::fmt::{self, Write};
@@ -542,6 +542,13 @@ impl<H: HasContext + ?Sized> BoundTexture<'_, H> {
         Ok(())
     }
 
+    pub(super) fn set_interpolation_mode(&mut self, mode: InterpolationMode) {
+        match mode {
+            InterpolationMode::NearestNeighbor => self.filtering_nearest(),
+            InterpolationMode::Bilinear => self.filtering_linear(),
+        }
+    }
+
     /// Set the texture parameters to NEAREST filtering.
     pub(super) fn filtering_nearest(&mut self) {
         unsafe {
@@ -554,6 +561,22 @@ impl<H: HasContext + ?Sized> BoundTexture<'_, H> {
                 glow::TEXTURE_2D,
                 glow::TEXTURE_MIN_FILTER,
                 glow::NEAREST as _,
+            );
+        }
+    }
+
+    /// Set the texture parameters to LINEAR filtering.
+    pub(super) fn filtering_linear(&mut self) {
+        unsafe {
+            self.context.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::LINEAR as _,
+            );
+            self.context.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::LINEAR as _,
             );
         }
     }

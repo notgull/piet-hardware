@@ -574,11 +574,13 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
         interp: InterpolationMode,
     ) {
         let dst_rect = dst_rect.into();
+
+        image.texture.bind(None).set_interpolation_mode(interp);
+
         let textured_brush = Brush::textured(
             image,
             Rect::new(0.0, 0.0, image.size.width, image.size.height),
             dst_rect,
-            interp,
         );
 
         self.fill_rect(dst_rect, &textured_brush);
@@ -592,7 +594,8 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
         interp: InterpolationMode,
     ) {
         let (src_rect, dst_rect) = (src_rect.into(), dst_rect.into());
-        let textured_brush = Brush::textured(image, src_rect, dst_rect, interp);
+        image.texture.bind(None).set_interpolation_mode(interp);
+        let textured_brush = Brush::textured(image, src_rect, dst_rect);
 
         self.fill_rect(dst_rect, &textured_brush);
     }

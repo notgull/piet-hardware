@@ -113,12 +113,7 @@ impl<H: HasContext + ?Sized> Brush<H> {
         Brush(BrushInner::RadialGradient(gradient))
     }
 
-    pub(super) fn textured(
-        image: &crate::Image<H>,
-        src: Rect,
-        dst: Rect,
-        mode: InterpolationMode,
-    ) -> Self {
+    pub(super) fn textured(image: &crate::Image<H>, src: Rect, dst: Rect) -> Self {
         // Transforming from "dst" to "src" involves:
         // - translating by -dst.x0, -dst.y0
         // - scaling by src.width / dst.width, src.height / dst.height
@@ -131,9 +126,6 @@ impl<H: HasContext + ?Sized> Brush<H> {
 
         // Now, compose the transforms in reverse order.
         let dst_to_src = translate2 * scale * translate1;
-
-        // TODO: Handle interpolation mode.
-        let _ = mode;
 
         Brush(BrushInner::Texture {
             texture: image.texture.clone(),

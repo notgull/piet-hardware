@@ -94,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Panic on any errors.
         render_context.finish().unwrap();
-        render_context.status().unwrap(); 
+        render_context.status().unwrap();
 
         tick += 1;
     })
