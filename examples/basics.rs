@@ -86,9 +86,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 piet::ImageFormat::RgbaSeparate,
             )
             .unwrap();
+
+        let posn_shift_x = 0.0;//((tick as f64) / 25.0).cos() * 50.0;
+        let posn_shift_y = 0.0;//((tick as f64) / 25.0).sin() * 50.0;
+        let posn_x = posn_shift_x + 400.0;
+        let posn_y = posn_shift_y + 400.0;
+
+        let size_shift_x = ((tick as f64) / 50.0).cos() * 50.0;
+        let size_shift_y = ((tick as f64) / 50.0).cos() * 50.0;       
+
         render_context.draw_image(
             &image,
-            Rect::new(400.0, 400.0, 550.0, 550.0),
+            Rect::new(posn_x, posn_y, posn_x + 100.0 + size_shift_x, posn_y + 100.0 + size_shift_y),
             piet::InterpolationMode::Bilinear,
         );
 

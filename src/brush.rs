@@ -19,7 +19,7 @@
 
 #![allow(clippy::wrong_self_convention)]
 
-use crate::resources::{BoundProgram, Fragment, Program, Shader, Texture, Vertex};
+use crate::resources::{BoundProgram, BoundTexture, Fragment, Program, Shader, Texture, Vertex};
 use crate::{Error, GlVersion, RenderContext};
 
 use glow::HasContext;
@@ -121,11 +121,16 @@ impl<H: HasContext + ?Sized> Brush<H> {
 
         let translate1 = Affine::translate((-dst.x0, -dst.y0));
         let scale =
-            Affine::scale_non_uniform(src.width() / dst.width(), src.height() / dst.height());
+            Affine::scale_non_uniform(src.width() / dst.width(), -src.height() / dst.height());
         let translate2 = Affine::translate((src.x0, src.y0));
 
-        // Now, compose the transforms in reverse order.
-        let dst_to_src = translate2 * scale * translate1;
+        // We also need to scale down to GL texture space (0..1)
+        let src_size = src.size();
+        let gl_scale = Affine::scale_non_uniform(1.0 / src_size.width, 1.0 / src_size.height);
+        let posn_shift = Affine::translate((0.5, 0.5));
+
+        // Now, compose the transforms.
+        let dst_to_src = gl_scale * scale * translate1;
 
         Brush(BrushInner::Texture {
             texture: image.texture.clone(),
@@ -204,14 +209,14 @@ impl<H: HasContext + ?Sized> Brushes<H> {
     /// Run a closure with the current program set to that of a specific target.
     ///
     /// This function takes care of uniforms.
-    pub(super) fn with_target(
+    pub(super) fn with_target<'a>(
         &mut self,
         context: &Rc<H>,
         version: GlVersion,
-        brush: &Brush<H>,
+        brush: &'a Brush<H>,
         mvp: &Affine,
         mask: Option<&Mask<'_, H>>,
-    ) -> Result<BoundProgram<'_, H>, Error> {
+    ) -> Result<BoundUniformProgram<'_, 'a, H>, Error> {
         let shader = self.shader_for_brush(context, version, brush, mask)?;
 
         // Get location for the uniforms we use.
@@ -233,13 +238,13 @@ impl<H: HasContext + ?Sized> Brushes<H> {
             Some((
                 shader.uniform_location(TEXTURE)?.clone(),
                 shader.uniform_location(TEXTURE_REVERSE_TRANSFORM)?.clone(),
-                shader.uniform_location(MVP_INVERSE)?.clone(),
             ))
         } else {
             None
         };
 
         let program = shader.bind();
+        let mut bound_texture = None;
 
         // Set the MVP.
         program.register_mat3(&mvp_uniform, mvp);
@@ -262,7 +267,7 @@ impl<H: HasContext + ?Sized> Brushes<H> {
 
         // Set the image transforms.
         if let (
-            Some((texture_uniform, texture_reverse_transform_uniform, mvp_inverse_transform)),
+            Some((texture_uniform, texture_reverse_transform_uniform)),
             Brush(BrushInner::Texture {
                 texture,
                 dst_to_src,
@@ -272,16 +277,17 @@ impl<H: HasContext + ?Sized> Brushes<H> {
             {
                 let mut bound = texture.bind(Some(0));
                 program.register_texture(&texture_uniform, &mut bound);
+                bound_texture = Some(bound);
             }
 
-            let dst_to_src = dst_to_src.inverse();
+            let dst_to_src = *dst_to_src;
             program.register_mat3(&texture_reverse_transform_uniform, &dst_to_src);
-
-            let mvp_inverse = mvp.inverse();
-            program.register_mat3(&mvp_inverse_transform, &mvp_inverse);
         }
 
-        Ok(program)
+        Ok(BoundUniformProgram {
+            _bound_program: program,
+            _bound_texture: bound_texture,
+        })
     }
 
     fn shader_for_brush(
@@ -346,6 +352,11 @@ impl<H: HasContext + ?Sized> Brushes<H> {
             }
         }
     }
+}
+
+pub struct BoundUniformProgram<'prog, 'tex, H: HasContext + ?Sized> {
+    _bound_program: BoundProgram<'prog, H>,
+    _bound_texture: Option<BoundTexture<'tex, H>>,
 }
 
 const SHADER_SOURCE_CAPACITY: usize = 1024;
@@ -504,13 +515,12 @@ impl FragmentBuilder {
             "
             uniform sampler2D {TEXTURE};
             uniform mat3 {TEXTURE_REVERSE_TRANSFORM};
-            uniform mat3 {MVP_INVERSE};
 
             vec4 {GET_COLOR}() {{
                 // Get the original coords in texture space.
-                vec2 textureCoords = ({MVP_INVERSE} * {TEXTURE_REVERSE_TRANSFORM} * gl_FragCoord.xyz).xy;
+                vec2 textureCoords = ({TEXTURE_REVERSE_TRANSFORM} * gl_FragCoord.xyz).xy;
 
-                return texture2D({TEXTURE}, textureCoords);
+                return texture({TEXTURE}, textureCoords);
             }}
         "
         )
