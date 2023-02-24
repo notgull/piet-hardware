@@ -39,6 +39,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let size = image.dimensions();
     let image_data = image.into_raw();
 
+    let mut image = None;
+
     util::with_renderer(move |render_context, width, height| {
         // Clear the screen to a light blue.
         render_context.clear(None, piet::Color::rgb8(0x87, 0xce, 0xeb));
@@ -54,7 +56,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Draw a solid red using the path.
         let solid_red = render_context.solid_brush(piet::Color::rgb8(0xff, 0x00, 0x00));
-        render_context.fill(Rect::new(0.0, 0.0, 200.0, 200.0), &solid_red);
         render_context.fill(&red_star, &solid_red);
 
         // Draw a black outline using the path.
@@ -78,26 +79,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap();
 
         // Create an image and draw it.
-        let image = render_context
-            .make_image(
-                size.0 as _,
-                size.1 as _,
-                &image_data,
-                piet::ImageFormat::RgbaSeparate,
-            )
-            .unwrap();
+        let image = image.get_or_insert_with(|| {
+            render_context
+                .make_image(
+                    size.0 as _,
+                    size.1 as _,
+                    &image_data,
+                    piet::ImageFormat::RgbaSeparate,
+                )
+                .unwrap()
+        });
 
-        let posn_shift_x = 0.0;//((tick as f64) / 25.0).cos() * 50.0;
-        let posn_shift_y = 0.0;//((tick as f64) / 25.0).sin() * 50.0;
+        let posn_shift_x = ((tick as f64) / 25.0).cos() * 50.0;
+        let posn_shift_y = ((tick as f64) / 25.0).sin() * 50.0;
         let posn_x = posn_shift_x + 400.0;
         let posn_y = posn_shift_y + 400.0;
 
         let size_shift_x = ((tick as f64) / 50.0).cos() * 50.0;
-        let size_shift_y = ((tick as f64) / 50.0).cos() * 50.0;       
+        let size_shift_y = ((tick as f64) / 50.0).sin() * 50.0;
 
         render_context.draw_image(
-            &image,
-            Rect::new(posn_x, posn_y, posn_x + 100.0 + size_shift_x, posn_y + 100.0 + size_shift_y),
+            image,
+            Rect::new(
+                posn_x,
+                posn_y,
+                posn_x + 100.0 + size_shift_x,
+                posn_y + 100.0 + size_shift_y,
+            ),
+            piet::InterpolationMode::Bilinear,
+        );
+
+        // Draw a subsection of the image.
+        render_context.draw_image_area(
+            image,
+            Rect::new(
+                25.0 + posn_shift_x,
+                25.0 + posn_shift_y,
+                50.0 + posn_shift_x,
+                50.0 + posn_shift_y,
+            ),
+            Rect::new(0.0, 0.0, 100.0, 100.0),
             piet::InterpolationMode::Bilinear,
         );
 

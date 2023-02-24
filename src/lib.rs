@@ -383,6 +383,10 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
             our_rect.intersect(shape_rect)
         }
     }
+
+    fn size(&self) -> Size {
+        Size::new(self.size.0 as f64, self.size.1 as f64)
+    }
 }
 
 impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
@@ -581,6 +585,7 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
             image,
             Rect::new(0.0, 0.0, image.size.width, image.size.height),
             dst_rect,
+            self.size(),
         );
 
         self.fill_rect(dst_rect, &textured_brush);
@@ -595,7 +600,7 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
     ) {
         let (src_rect, dst_rect) = (src_rect.into(), dst_rect.into());
         image.texture.bind(None).set_interpolation_mode(interp);
-        let textured_brush = Brush::textured(image, src_rect, dst_rect);
+        let textured_brush = Brush::textured(image, src_rect, dst_rect, self.size());
 
         self.fill_rect(dst_rect, &textured_brush);
     }

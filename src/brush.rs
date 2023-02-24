@@ -23,8 +23,8 @@ use crate::resources::{BoundProgram, BoundTexture, Fragment, Program, Shader, Te
 use crate::{Error, GlVersion, RenderContext};
 
 use glow::HasContext;
-use piet::kurbo::{Affine, Rect};
-use piet::{FixedLinearGradient, FixedRadialGradient, InterpolationMode, IntoBrush};
+use piet::kurbo::{Affine, Rect, Size};
+use piet::{FixedLinearGradient, FixedRadialGradient, Image as _, InterpolationMode, IntoBrush};
 
 use std::borrow::Cow;
 use std::collections::hash_map::{Entry, HashMap};
@@ -113,24 +113,24 @@ impl<H: HasContext + ?Sized> Brush<H> {
         Brush(BrushInner::RadialGradient(gradient))
     }
 
-    pub(super) fn textured(image: &crate::Image<H>, src: Rect, dst: Rect) -> Self {
-        // Transforming from "dst" to "src" involves:
-        // - translating by -dst.x0, -dst.y0
-        // - scaling by src.width / dst.width, src.height / dst.height
-        // - translating by src.x0, src.y0
+    pub(super) fn textured(image: &crate::Image<H>, src: Rect, dst: Rect, draw_size: Size) -> Self {
+        // Create a matrix that converts the gl_FragCoord.xy coordinates from coordinates in
+        // the destination rectangle to GL texture coordinates in the source rectangle.
 
-        let translate1 = Affine::translate((-dst.x0, -dst.y0));
-        let scale =
-            Affine::scale_non_uniform(src.width() / dst.width(), -src.height() / dst.height());
-        let translate2 = Affine::translate((src.x0, src.y0));
+        // Scale down to texture-sized coordinates.
+        let scale = Affine::scale_non_uniform(1.0 / dst.width(), -1.0 / dst.height());
 
-        // We also need to scale down to GL texture space (0..1)
-        let src_size = src.size();
-        let gl_scale = Affine::scale_non_uniform(1.0 / src_size.width, 1.0 / src_size.height);
-        let posn_shift = Affine::translate((0.5, 0.5));
+        // Translate to the destination rectangle.
+        let dst_translate = Affine::translate((-2.0 * dst.x0, 2.0 * (dst.y0 - draw_size.height)));
 
-        // Now, compose the transforms.
-        let dst_to_src = gl_scale * scale * translate1;
+        // TODO: Translate to source area.
+        let src_scale = Affine::scale_non_uniform(
+            image.size().width / src.width(),
+            image.size().height / src.height(),
+        );
+        let src_translate = Affine::translate((2.0 * src.x0, 2.0 * src.y0));
+
+        let dst_to_src = scale * dst_translate * src_scale * src_translate;
 
         Brush(BrushInner::Texture {
             texture: image.texture.clone(),
@@ -520,7 +520,10 @@ impl FragmentBuilder {
                 // Get the original coords in texture space.
                 vec2 textureCoords = ({TEXTURE_REVERSE_TRANSFORM} * gl_FragCoord.xyz).xy;
 
-                return texture({TEXTURE}, textureCoords);
+                // Normalize the coords by the w component.
+                textureCoords /= gl_FragCoord.w;
+
+                return texture2D({TEXTURE}, textureCoords);
             }}
         "
         )
