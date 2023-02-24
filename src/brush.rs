@@ -138,18 +138,21 @@ impl<H: HasContext + ?Sized> Clone for Brush<H> {
 }
 
 impl<H: HasContext + ?Sized> Brush<H> {
-    pub(super) fn solid(color: piet::Color) -> Self {
+    /// Create a new solid color brush.
+    pub fn solid(color: piet::Color) -> Self {
         Brush(BrushInner::Solid(color))
     }
 
-    pub(super) fn linear_gradient(gradient: FixedLinearGradient) -> Self {
+    /// Create a new linear gradient brush.
+    pub fn linear_gradient(gradient: FixedLinearGradient) -> Self {
         Brush(BrushInner::LinearGradient {
             gradient,
             cached_texture: RefCell::new(None),
         })
     }
 
-    pub(super) fn radial_gradient(gradient: FixedRadialGradient) -> Self {
+    /// Create a new radial gradient brush.
+    pub fn radial_gradient(gradient: FixedRadialGradient) -> Self {
         Brush(BrushInner::RadialGradient {
             gradient,
             cached_texture: RefCell::new(None),
@@ -296,7 +299,7 @@ impl<H: HasContext + ?Sized> Brushes<H> {
                 } => {
                     let mut cache = cached_texture.borrow_mut();
                     let texture = match &mut *cache {
-                        Some((texture, size)) if *size != window_size => texture,
+                        Some((texture, size)) if size_approx_eq(*size, window_size) => texture,
                         _ => {
                             let texture = linear_gradient_texture(context, gradient, window_size)?;
                             &mut cache.insert((Rc::new(texture), window_size)).0
@@ -312,7 +315,7 @@ impl<H: HasContext + ?Sized> Brushes<H> {
                 } => {
                     let mut cache = cached_texture.borrow_mut();
                     let texture = match &mut *cache {
-                        Some((texture, size)) if *size != window_size => texture,
+                        Some((texture, size)) if size_approx_eq(*size, window_size) => texture,
                         _ => {
                             let texture = radial_gradient_texture(context, gradient, window_size)?;
                             &mut cache.insert((Rc::new(texture), window_size)).0
@@ -822,4 +825,8 @@ fn convert_point(p: piet::kurbo::Point) -> tiny_skia::Point {
 fn convert_color(p: piet::Color) -> tiny_skia::Color {
     let (r, g, b, a) = p.as_rgba();
     tiny_skia::Color::from_rgba(r as _, g as _, b as _, a as _).unwrap()
+}
+
+fn size_approx_eq(a: Size, b: Size) -> bool {
+    (a.width - b.width).abs() < 0.5 && (a.height - b.height).abs() < 0.5
 }

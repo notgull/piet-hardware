@@ -19,8 +19,8 @@
 
 include!("util/setup_context.rs");
 
-use piet::kurbo::{Affine, BezPath, Circle, Point, Rect};
-use piet::RenderContext as _;
+use piet::kurbo::{Affine, BezPath, Circle, Point, Rect, Shape, Vec2};
+use piet::{GradientStop, RenderContext as _};
 
 use std::path::Path;
 
@@ -73,8 +73,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let rot = ((tick * 2) % 360) as f64 / 180.0 * std::f64::consts::PI;
                 let trans =
                     Affine::scale(0.75) * Affine::translate((750.0, 275.0)) * Affine::rotate(rot);
-                let solid = radial_gradient
-                    .get_or_insert_with(|| render_context.solid_brush(piet::Color::GREEN));
+                let solid = radial_gradient.get_or_insert_with(|| {
+                    let grad = piet::FixedRadialGradient {
+                        center: Point::new(0.0, 0.0),
+                        origin_offset: Vec2::new(0.0, 0.0),
+                        radius: 150.0,
+                        stops: vec![
+                            GradientStop {
+                                pos: 0.0,
+                                color: piet::Color::LIME,
+                            },
+                            GradientStop {
+                                pos: 0.5,
+                                color: piet::Color::MAROON,
+                            },
+                            GradientStop {
+                                pos: 1.0,
+                                color: piet::Color::NAVY,
+                            },
+                        ],
+                    };
+
+                    render_context.gradient(grad).unwrap()
+                });
 
                 render_context.transform(trans);
                 render_context.fill(&star, solid);
