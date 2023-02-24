@@ -20,8 +20,9 @@
 use crate::Error;
 use glow::HasContext;
 use piet::kurbo::Affine;
-use piet::{ImageFormat, InterpolationMode};
+use piet::{ImageFormat, InterpolationMode, Text};
 
+use std::borrow::Borrow;
 use std::collections::hash_map::{Entry, HashMap};
 use std::fmt::{self, Write};
 use std::marker::PhantomData;
@@ -160,10 +161,10 @@ impl<H: HasContext + ?Sized> BoundProgram<'_, H> {
     }
 
     /// Register a texture as a `sampler2D` uniform.
-    pub(super) fn register_texture(
+    pub(super) fn register_texture<B: Borrow<Texture<H>>>(
         &self,
         location: &H::UniformLocation,
-        texture: &mut BoundTexture<'_, H>,
+        texture: &mut BoundTexture<H, B>,
     ) {
         unsafe {
             let active = texture.active.expect("Texture is not active");
@@ -318,6 +319,12 @@ impl<H: HasContext + ?Sized> Texture<H> {
                 Error::BackendError(err.into())
             })?;
 
+            let this = Self {
+                context: context.clone(),
+                id,
+            };
+            let _bound = this.bind(None);
+
             // Set wrap to GL_CLAMP_TO_BORDER and border color to transparent.
             context.tex_parameter_i32(
                 glow::TEXTURE_2D,
@@ -335,17 +342,15 @@ impl<H: HasContext + ?Sized> Texture<H> {
                 &[0.0, 0.0, 0.0, 0.0],
             );
 
-            Ok(Self {
-                context: context.clone(),
-                id,
-            })
+            drop(_bound);
+            Ok(this)
         }
     }
 
     /// Run with this texture bound to the `GL_TEXTURE_2D` unit ID.
     ///
     /// `active` should be `Some` to also bind this to `GL_TEXTURE0 + active`.
-    pub(super) fn bind(&self, active: Option<u32>) -> BoundTexture<'_, H> {
+    pub(super) fn bind(&self, active: Option<u32>) -> BoundTexture<H, &Texture<H>> {
         // If possible, set the active texture.
         if let Some(active) = active {
             unsafe {
@@ -359,8 +364,32 @@ impl<H: HasContext + ?Sized> Texture<H> {
         }
 
         BoundTexture {
-            context: &self.context,
+            texture: self,
             active,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Run with this texture bound to the `GL_TEXTURE_2D` unit ID.
+    ///
+    /// `active` should be `Some` to also bind this to `GL_TEXTURE0 + active`.
+    pub(super) fn bind_rc(self: Rc<Self>, active: Option<u32>) -> BoundTexture<H, Rc<Texture<H>>> {
+        // If possible, set the active texture.
+        if let Some(active) = active {
+            unsafe {
+                self.context.active_texture(glow::TEXTURE0 + active);
+            }
+        }
+
+        // Bind to the GL texture slot.
+        unsafe {
+            self.context.bind_texture(glow::TEXTURE_2D, Some(self.id));
+        }
+
+        BoundTexture {
+            texture: self,
+            active,
+            _marker: PhantomData,
         }
     }
 }
@@ -464,29 +493,35 @@ pub(super) enum BufferTarget {
 }
 
 /// An object representing a currently bound texture.
-pub(super) struct BoundTexture<'a, H: HasContext + ?Sized> {
-    context: &'a H,
+pub(super) struct BoundTexture<H: HasContext + ?Sized, B: Borrow<Texture<H>>> {
+    texture: B,
 
     /// If we are bound to an active texture, we're bound here.
     active: Option<u32>,
+
+    _marker: PhantomData<H>,
 }
 
-impl<H: HasContext + ?Sized> Drop for BoundTexture<'_, H> {
+impl<H: HasContext + ?Sized, B: Borrow<Texture<H>>> Drop for BoundTexture<H, B> {
     fn drop(&mut self) {
         unsafe {
-            self.context.bind_texture(glow::TEXTURE_2D, None);
+            self.context().bind_texture(glow::TEXTURE_2D, None);
         }
     }
 }
 
-impl<H: HasContext + ?Sized> BoundTexture<'_, H> {
+impl<H: HasContext + ?Sized, B: Borrow<Texture<H>>> BoundTexture<H, B> {
+    fn context(&self) -> &H {
+        &self.texture.borrow().context
+    }
+
     /// Register this bound texture to a uniform.
     ///
     /// # Safety
     ///
     /// The target uniform must be a `sampler2D`.
     pub(super) unsafe fn register_in_uniform(&mut self, uniform: &H::UniformLocation) {
-        self.context.uniform_1_u32(
+        self.context().uniform_1_u32(
             Some(uniform),
             self.active
                 .expect("Called register_in_uniform for inactive texture"),
@@ -496,7 +531,7 @@ impl<H: HasContext + ?Sized> BoundTexture<'_, H> {
     /// Fill this texture with nothing.
     pub(super) fn fill_with_nothing(&mut self, width: i32, height: i32) {
         unsafe {
-            self.context.tex_image_2d(
+            self.context().tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
                 glow::RGB as _,
@@ -526,7 +561,7 @@ impl<H: HasContext + ?Sized> BoundTexture<'_, H> {
         };
 
         unsafe {
-            self.context.tex_image_2d(
+            self.context().tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
                 format as _,
@@ -552,12 +587,12 @@ impl<H: HasContext + ?Sized> BoundTexture<'_, H> {
     /// Set the texture parameters to NEAREST filtering.
     pub(super) fn filtering_nearest(&mut self) {
         unsafe {
-            self.context.tex_parameter_i32(
+            self.context().tex_parameter_i32(
                 glow::TEXTURE_2D,
                 glow::TEXTURE_MAG_FILTER,
                 glow::NEAREST as _,
             );
-            self.context.tex_parameter_i32(
+            self.context().tex_parameter_i32(
                 glow::TEXTURE_2D,
                 glow::TEXTURE_MIN_FILTER,
                 glow::NEAREST as _,
@@ -568,12 +603,12 @@ impl<H: HasContext + ?Sized> BoundTexture<'_, H> {
     /// Set the texture parameters to LINEAR filtering.
     pub(super) fn filtering_linear(&mut self) {
         unsafe {
-            self.context.tex_parameter_i32(
+            self.context().tex_parameter_i32(
                 glow::TEXTURE_2D,
                 glow::TEXTURE_MAG_FILTER,
                 glow::LINEAR as _,
             );
-            self.context.tex_parameter_i32(
+            self.context().tex_parameter_i32(
                 glow::TEXTURE_2D,
                 glow::TEXTURE_MIN_FILTER,
                 glow::LINEAR as _,

@@ -364,6 +364,7 @@ impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
             brush,
             gl_transform,
             mask.as_mut().map(|m| m.as_brush_mask()).as_ref(),
+            Size::new(self.size.0 as f64, self.size.1 as f64),
         );
 
         // Upload the vertex data.
@@ -485,12 +486,12 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
         }
 
         // Render the buffers to the screen.
-        let brush = brush.make_brush(self, self.bbox(&shape));
+        let brush = brush.make_brush(self, bbox(&shape));
         self.render_buffers(brush.as_ref());
     }
 
     fn fill(&mut self, shape: impl Shape, brush: &impl IntoBrush<Self>) {
-        let brush = brush.make_brush(self, self.bbox(&shape));
+        let brush = brush.make_brush(self, bbox(&shape));
         self.fill_impl(shape, brush.as_ref(), FillRule::NonZero);
     }
 
@@ -585,7 +586,6 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
             image,
             Rect::new(0.0, 0.0, image.size.width, image.size.height),
             dst_rect,
-            self.size(),
         );
 
         self.fill_rect(dst_rect, &textured_brush);
@@ -600,7 +600,7 @@ impl<'a, H: HasContext + ?Sized> piet::RenderContext for RenderContext<'a, H> {
     ) {
         let (src_rect, dst_rect) = (src_rect.into(), dst_rect.into());
         image.texture.bind(None).set_interpolation_mode(interp);
-        let textured_brush = Brush::textured(image, src_rect, dst_rect, self.size());
+        let textured_brush = Brush::textured(image, src_rect, dst_rect);
 
         self.fill_rect(dst_rect, &textured_brush);
     }
@@ -776,4 +776,8 @@ fn one<T>(t: T) -> ArrayVec<T, 2> {
 
 fn convert_point(point: Point) -> Point2D<f32> {
     Point2D::new(point.x as f32, point.y as f32)
+}
+
+fn bbox(shape: &impl Shape) -> impl FnOnce() -> Rect + '_ {
+    move || shape.bounding_box()
 }

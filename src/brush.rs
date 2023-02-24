@@ -16,6 +16,11 @@
 // Public License along with `piet-glow`. If not, see <https://www.gnu.org/licenses/>.
 
 //! Handles the brush setup.
+//!
+//! TODO: Right now, gradient rendering is done by first rendering the gradient in tiny-skia and
+//! then using that as a texture. It's possible that this could be done on-the-fly in the shader.
+//! However, I can't figure out a way of doing this that isn't littered with branches, which would
+//! probably be slower than the current solution.
 
 #![allow(clippy::wrong_self_convention)]
 
@@ -23,14 +28,17 @@ use crate::resources::{BoundProgram, BoundTexture, Fragment, Program, Shader, Te
 use crate::{Error, GlVersion, RenderContext};
 
 use glow::HasContext;
-use piet::kurbo::{Affine, Rect, Size};
+use piet::kurbo::{Affine, Point, Rect, Size};
 use piet::{FixedLinearGradient, FixedRadialGradient, Image as _, InterpolationMode, IntoBrush};
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::hash_map::{Entry, HashMap};
 use std::fmt::Write;
 use std::mem;
 use std::rc::Rc;
+
+use tiny_skia::{GradientStop, LinearGradient, Pixmap, RadialGradient};
 
 // Various variable/function names used in GLSL.
 const IN_POSITION: &str = "position";
@@ -41,6 +49,8 @@ const LINEAR_GRADIENT_START: &str = "linearGradientStart";
 const LINEAR_GRADIENT_END: &str = "linearGradientEnd";
 const GRADIENT_COLORS: &str = "gradientColors";
 const GRADIENT_STOPS: &str = "gradientStops";
+const GRADIENT_CURRENT_COORD: &str = "gradientCurrentCoord";
+const GRADIENT_STOP_COUNT: &str = "gradientStopCount";
 
 const MVP: &str = "mvp";
 const MVP_INVERSE: &str = "mvpInverse";
@@ -53,6 +63,7 @@ const MASK_COORDS: &str = "maskCoords";
 const TEXTURE_MASK: &str = "textureMask";
 
 const TEXTURE: &str = "texture";
+const TEXTURE_TRANSFORM: &str = "textureTransform";
 const TEXTURE_REVERSE_TRANSFORM: &str = "textureRevTransform";
 const TEX_COORDS: &str = "texCoords";
 
@@ -67,11 +78,17 @@ enum BrushInner<H: HasContext + ?Sized> {
     /// A solid color.
     Solid(piet::Color),
 
-    /// A linear gradient.
-    LinearGradient(FixedLinearGradient),
+    /// Linear gradient.
+    LinearGradient {
+        gradient: FixedLinearGradient,
+        cached_texture: RefCell<Option<(Rc<Texture<H>>, Size)>>,
+    },
 
-    /// A radial gradient.
-    RadialGradient(FixedRadialGradient),
+    /// Radial gradient.
+    RadialGradient {
+        gradient: FixedRadialGradient,
+        cached_texture: RefCell<Option<(Rc<Texture<H>>, Size)>>,
+    },
 
     /// A texture.
     Texture {
@@ -87,8 +104,28 @@ impl<H: HasContext + ?Sized> Clone for Brush<H> {
     fn clone(&self) -> Self {
         match &self.0 {
             BrushInner::Solid(color) => Brush::solid(*color),
-            BrushInner::LinearGradient(gradient) => Brush::linear_gradient(gradient.clone()),
-            BrushInner::RadialGradient(gradient) => Brush::radial_gradient(gradient.clone()),
+            BrushInner::LinearGradient {
+                gradient,
+                cached_texture,
+            } => {
+                let cached_texture = cached_texture.borrow().clone();
+
+                Brush(BrushInner::LinearGradient {
+                    gradient: gradient.clone(),
+                    cached_texture: RefCell::new(cached_texture),
+                })
+            }
+            BrushInner::RadialGradient {
+                gradient,
+                cached_texture,
+            } => {
+                let cached_texture = cached_texture.borrow().clone();
+
+                Brush(BrushInner::RadialGradient {
+                    gradient: gradient.clone(),
+                    cached_texture: RefCell::new(cached_texture),
+                })
+            }
             BrushInner::Texture {
                 texture,
                 dst_to_src,
@@ -106,44 +143,30 @@ impl<H: HasContext + ?Sized> Brush<H> {
     }
 
     pub(super) fn linear_gradient(gradient: FixedLinearGradient) -> Self {
-        Brush(BrushInner::LinearGradient(gradient))
+        Brush(BrushInner::LinearGradient {
+            gradient,
+            cached_texture: RefCell::new(None),
+        })
     }
 
     pub(super) fn radial_gradient(gradient: FixedRadialGradient) -> Self {
-        Brush(BrushInner::RadialGradient(gradient))
+        Brush(BrushInner::RadialGradient {
+            gradient,
+            cached_texture: RefCell::new(None),
+        })
     }
 
-    pub(super) fn textured(image: &crate::Image<H>, src: Rect, dst: Rect, draw_size: Size) -> Self {
-        // Create a matrix that converts the gl_FragCoord.xy coordinates from coordinates in
-        // the destination rectangle to GL texture coordinates in the source rectangle.
-
-        // Scale down to texture-sized coordinates.
-        let scale = Affine::scale_non_uniform(1.0 / dst.width(), -1.0 / dst.height());
-
-        // Translate to the destination rectangle.
-        let dst_translate = Affine::translate((-2.0 * dst.x0, 2.0 * (dst.y0 - draw_size.height)));
-
-        // TODO: Translate to source area.
-        let src_scale = Affine::scale_non_uniform(
-            image.size().width / src.width(),
-            image.size().height / src.height(),
-        );
-        let src_translate = Affine::translate((2.0 * src.x0, 2.0 * src.y0));
-
-        let dst_to_src = scale * dst_translate * src_scale * src_translate;
-
+    pub(super) fn textured(image: &crate::Image<H>, src: Rect, dst: Rect) -> Self {
         Brush(BrushInner::Texture {
             texture: image.texture.clone(),
-            dst_to_src,
+            dst_to_src: texture_transform(src, dst, image.size()),
         })
     }
 
     fn input_type(&self) -> InputType {
         match &self.0 {
             BrushInner::Solid(_) => InputType::Solid,
-            BrushInner::LinearGradient(_) => InputType::Linear,
-            BrushInner::RadialGradient(_) => InputType::Radial,
-            BrushInner::Texture { .. } => InputType::Texture,
+            _ => InputType::Texture,
         }
     }
 }
@@ -172,8 +195,6 @@ pub(super) struct Mask<'a, H: HasContext + ?Sized> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum InputType {
     Solid,
-    Linear,
-    Radial,
     Texture,
 }
 
@@ -209,14 +230,15 @@ impl<H: HasContext + ?Sized> Brushes<H> {
     /// Run a closure with the current program set to that of a specific target.
     ///
     /// This function takes care of uniforms.
-    pub(super) fn with_target<'a>(
+    pub(super) fn with_target(
         &mut self,
         context: &Rc<H>,
         version: GlVersion,
-        brush: &'a Brush<H>,
+        brush: &Brush<H>,
         mvp: &Affine,
         mask: Option<&Mask<'_, H>>,
-    ) -> Result<BoundUniformProgram<'_, 'a, H>, Error> {
+        window_size: Size,
+    ) -> Result<BoundUniformProgram<'_, H>, Error> {
         let shader = self.shader_for_brush(context, version, brush, mask)?;
 
         // Get location for the uniforms we use.
@@ -237,7 +259,7 @@ impl<H: HasContext + ?Sized> Brushes<H> {
         let textured_uniforms = if matches!(brush.input_type(), InputType::Texture) {
             Some((
                 shader.uniform_location(TEXTURE)?.clone(),
-                shader.uniform_location(TEXTURE_REVERSE_TRANSFORM)?.clone(),
+                shader.uniform_location(TEXTURE_TRANSFORM)?.clone(),
             ))
         } else {
             None
@@ -266,22 +288,55 @@ impl<H: HasContext + ?Sized> Brushes<H> {
         }
 
         // Set the image transforms.
-        if let (
-            Some((texture_uniform, texture_reverse_transform_uniform)),
-            Brush(BrushInner::Texture {
-                texture,
-                dst_to_src,
-            }),
-        ) = (textured_uniforms, &brush)
-        {
+        if let Some((texture_uniform, texture_transform_uniform)) = textured_uniforms {
+            let (texture, dst_to_src) = match brush.0 {
+                BrushInner::LinearGradient {
+                    ref gradient,
+                    ref cached_texture,
+                } => {
+                    let mut cache = cached_texture.borrow_mut();
+                    let texture = match &mut *cache {
+                        Some((texture, size)) if *size != window_size => texture,
+                        _ => {
+                            let texture = linear_gradient_texture(context, gradient, window_size)?;
+                            &mut cache.insert((Rc::new(texture), window_size)).0
+                        }
+                    };
+
+                    (texture.clone(), sized_transform(window_size))
+                }
+
+                BrushInner::RadialGradient {
+                    ref gradient,
+                    ref cached_texture,
+                } => {
+                    let mut cache = cached_texture.borrow_mut();
+                    let texture = match &mut *cache {
+                        Some((texture, size)) if *size != window_size => texture,
+                        _ => {
+                            let texture = radial_gradient_texture(context, gradient, window_size)?;
+                            &mut cache.insert((Rc::new(texture), window_size)).0
+                        }
+                    };
+
+                    (texture.clone(), sized_transform(window_size))
+                }
+
+                BrushInner::Texture {
+                    ref texture,
+                    dst_to_src,
+                } => (texture.clone(), dst_to_src),
+
+                _ => unreachable!(),
+            };
+
             {
-                let mut bound = texture.bind(Some(0));
+                let mut bound = texture.bind_rc(Some(0));
                 program.register_texture(&texture_uniform, &mut bound);
                 bound_texture = Some(bound);
             }
 
-            let dst_to_src = *dst_to_src;
-            program.register_mat3(&texture_reverse_transform_uniform, &dst_to_src);
+            program.register_mat3(&texture_transform_uniform, &dst_to_src);
         }
 
         Ok(BoundUniformProgram {
@@ -331,6 +386,7 @@ impl<H: HasContext + ?Sized> Brushes<H> {
             Entry::Vacant(entry) => {
                 // Create a new shader and insert it into the cache.
                 let vertex = VertexBuilder::new(version)
+                    .with_input_type(input_type)
                     .with_mask(mask_type)
                     .to_shader(context)?;
 
@@ -354,9 +410,9 @@ impl<H: HasContext + ?Sized> Brushes<H> {
     }
 }
 
-pub struct BoundUniformProgram<'prog, 'tex, H: HasContext + ?Sized> {
+pub struct BoundUniformProgram<'prog, H: HasContext + ?Sized> {
     _bound_program: BoundProgram<'prog, H>,
-    _bound_texture: Option<BoundTexture<'tex, H>>,
+    _bound_texture: Option<BoundTexture<H, Rc<Texture<H>>>>,
 }
 
 const SHADER_SOURCE_CAPACITY: usize = 1024;
@@ -393,6 +449,24 @@ impl VertexBuilder {
         }
     }
 
+    /// Uses the specified input.
+    fn with_input_type(&mut self, input_type: InputType) -> &mut Self {
+        match input_type {
+            InputType::Texture => self.with_texture_input(),
+            _ => self,
+        }
+    }
+
+    /// Adds a texture color input.
+    fn with_texture_input(&mut self) -> &mut Self {
+        self.textured_input = true;
+
+        writeln!(self.source, "uniform mat3 {TEXTURE_TRANSFORM};").unwrap();
+        writeln!(self.source, "out vec2 {TEX_COORDS};").unwrap();
+
+        self
+    }
+
     /// Adds a mask type.
     fn with_mask(&mut self, mask_type: MaskType) -> &mut Self {
         match mask_type {
@@ -418,11 +492,25 @@ impl VertexBuilder {
         writeln!(
             source,
             "    
-                vec2 finalPosition = ({MVP} * vec3({IN_POSITION}, 1.0)).xy; 
+                vec3 finalPosition = {MVP} * vec3({IN_POSITION}, 1.0);
+                finalPosition /= finalPosition.z;
                 gl_Position = vec4(finalPosition.x, -finalPosition.y, 0.0, 1.0);
             "
         )
         .unwrap();
+
+        if self.textured_input {
+            // Set up tex coords.
+            writeln!(
+                source,
+                "
+                    vec3 tCoords = {TEXTURE_TRANSFORM} * vec3({IN_POSITION}, 1.0);
+                    tCoords /= tCoords.z;
+                    {TEX_COORDS} = tCoords.xy;
+                "
+            )
+            .unwrap();
+        }
 
         if self.textured_mask {
             // Set up tex coords.
@@ -485,9 +573,7 @@ impl FragmentBuilder {
     fn with_input_type(&mut self, ty: InputType) -> &mut Self {
         match ty {
             InputType::Solid => self.with_solid_color(),
-            InputType::Linear => self.with_linear_gradient(),
             InputType::Texture => self.with_texture_input(),
-            _ => todo!(),
         }
     }
 
@@ -513,55 +599,16 @@ impl FragmentBuilder {
         writeln!(
             self.source,
             "
+            in vec2 {TEX_COORDS};
             uniform sampler2D {TEXTURE};
-            uniform mat3 {TEXTURE_REVERSE_TRANSFORM};
 
             vec4 {GET_COLOR}() {{
-                // Get the original coords in texture space.
-                vec2 textureCoords = ({TEXTURE_REVERSE_TRANSFORM} * gl_FragCoord.xyz).xy;
-
-                // Normalize the coords by the w component.
-                textureCoords /= gl_FragCoord.w;
-
-                return texture2D({TEXTURE}, textureCoords);
+                vec4 texColor = texture2D({TEXTURE}, {TEX_COORDS});
+                return texColor;
             }}
         "
         )
         .ok();
-
-        self
-    }
-
-    /// Use with a linear gradient.
-    fn with_linear_gradient(&mut self) -> &mut Self {
-        writeln!(
-            self.source,
-            "
-            uniform sampler2D {GRADIENT_STOPS};
-            uniform sampler2D {GRADIENT_COLORS};
-            uniform vec2 {LINEAR_GRADIENT_START};
-            uniform vec2 {LINEAR_GRADIENT_END};
-
-            float {GET_GRADIENT_COORD}(vec2 pos) {{
-                vec2 start = {LINEAR_GRADIENT_START};
-                vec2 end = {LINEAR_GRADIENT_END};
-                vec2 diff = end - start;
-                float len = length(diff);
-                float dot = dot(diff, pos - start);
-                return dot / len;
-            }}
-
-            vec4 {GET_COLOR}() {{
-                float coord = {GET_GRADIENT_COORD}(gl_FragCoord.xy);
-                float stop = texture2D({GRADIENT_STOPS}, vec2(coord, 0)).r;
-                vec4 color = texture2D({GRADIENT_COLORS}, vec2(stop, 0));
-                return color;
-            }}
-            "
-        )
-        .ok();
-
-        todo!();
 
         self
     }
@@ -654,4 +701,125 @@ impl GlVersion {
             GlVersion::Es30 => "#version 300 es",
         }
     }
+}
+
+/// Create a linear gradient as a texture.
+fn linear_gradient_texture<H: HasContext + ?Sized>(
+    context: &Rc<H>,
+    gradient: &FixedLinearGradient,
+    window_size: Size,
+) -> Result<Texture<H>, Error> {
+    let linear_gradient = tiny_skia::LinearGradient::new(
+        convert_point(gradient.start),
+        convert_point(gradient.end),
+        gradient
+            .stops
+            .iter()
+            .map(|stop| tiny_skia::GradientStop::new(stop.pos, convert_color(stop.color)))
+            .collect(),
+        tiny_skia::SpreadMode::Pad,
+        tiny_skia::Transform::identity(),
+    )
+    .ok_or_else(|| Error::BackendError("Failed to create linear gradient".into()))?;
+
+    convert_shader(context, linear_gradient, window_size)
+}
+
+/// Create a radial gradient as a texture.
+fn radial_gradient_texture<H: HasContext + ?Sized>(
+    context: &Rc<H>,
+    gradient: &FixedRadialGradient,
+    window_size: Size,
+) -> Result<Texture<H>, Error> {
+    let radial_gradient = tiny_skia::RadialGradient::new(
+        convert_point(gradient.center),
+        {
+            let end = gradient.center + gradient.origin_offset;
+            convert_point(end)
+        },
+        gradient.radius as f32,
+        gradient
+            .stops
+            .iter()
+            .map(|stop| tiny_skia::GradientStop::new(stop.pos, convert_color(stop.color)))
+            .collect(),
+        tiny_skia::SpreadMode::Pad,
+        tiny_skia::Transform::identity(),
+    )
+    .ok_or_else(|| Error::BackendError("Failed to create radial gradient".into()))?;
+
+    convert_shader(context, radial_gradient, window_size)
+}
+
+/// Convert a `tiny_skia` shader to a texture.
+fn convert_shader<H: HasContext + ?Sized>(
+    context: &Rc<H>,
+    shader: tiny_skia::Shader<'_>,
+    window_size: Size,
+) -> Result<Texture<H>, Error> {
+    let mut pixmap = tiny_skia::Pixmap::new(window_size.width as _, window_size.height as _)
+        .ok_or_else(|| Error::BackendError("Failed to create pixmap".into()))?;
+    let paint = tiny_skia::Paint {
+        shader,
+        ..Default::default()
+    };
+
+    // Draw the gradient.
+    let rect =
+        tiny_skia::Rect::from_xywh(0.0, 0.0, window_size.width as _, window_size.height as _)
+            .unwrap();
+    pixmap
+        .fill_rect(rect, &paint, Default::default(), None)
+        .ok_or_else(|| Error::BackendError("Failed to draw gradient".into()))?;
+
+    // Get the bytes.
+    let bytes = pixmap.data();
+
+    // Create the texture.
+    let texture = Texture::new(context)?;
+
+    // Upload the texture.
+    texture.bind(None).fill_with_image(
+        window_size.width as _,
+        window_size.height as _,
+        piet::ImageFormat::RgbaSeparate,
+        bytes,
+    )?;
+
+    Ok(texture)
+}
+
+fn sized_transform(size: Size) -> Affine {
+    let rect = Rect::from_origin_size((0.0, 0.0), size);
+    texture_transform(rect, rect, size)
+}
+
+/// A transform that maps a rectangle to another rectangle in a texture.
+fn texture_transform(src: Rect, dst: Rect, image_size: Size) -> Affine {
+    // First, translate the dst rectangle to the src rectangle.
+    let dst_translate = Affine::translate((-dst.x0, -dst.y0));
+
+    // Now, scale the dst rectangle to the src rectangle.
+    let dst_scale =
+        Affine::scale_non_uniform(src.width() / dst.width(), src.height() / dst.height());
+
+    // Translate the dst rectangle to the draw rectangle.
+    let src_translate = Affine::translate((src.x0, src.y0));
+
+    // Finally, scale the dst rectangle to texture coordinates [0..1]
+    let src_scale = Affine::scale_non_uniform(1.0 / image_size.width, 1.0 / image_size.height);
+
+    dst_scale * src_scale * dst_translate * src_translate
+}
+
+fn convert_point(p: piet::kurbo::Point) -> tiny_skia::Point {
+    tiny_skia::Point {
+        x: p.x as f32,
+        y: p.y as f32,
+    }
+}
+
+fn convert_color(p: piet::Color) -> tiny_skia::Color {
+    let (r, g, b, a) = p.as_rgba();
+    tiny_skia::Color::from_rgba(r as _, g as _, b as _, a as _).unwrap()
 }

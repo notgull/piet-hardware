@@ -39,7 +39,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let size = image.dimensions();
     let image_data = image.into_raw();
 
+    // Cached resources.
     let mut image = None;
+    let mut solid_red = None;
+    let mut outline = None;
+    let mut radial_gradient = None;
 
     util::with_renderer(move |render_context, width, height| {
         // Clear the screen to a light blue.
@@ -47,7 +51,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Add a clip.
         //render_context.clip(circle_path);
-
         let red_star = {
             let rot = (tick % 360) as f64 / 180.0 * std::f64::consts::PI;
             let transform = Affine::translate((200.0, 200.0)) * Affine::rotate(rot);
@@ -55,24 +58,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         // Draw a solid red using the path.
-        let solid_red = render_context.solid_brush(piet::Color::rgb8(0xff, 0x00, 0x00));
-        render_context.fill(&red_star, &solid_red);
+        let solid_red = solid_red
+            .get_or_insert_with(|| render_context.solid_brush(piet::Color::rgb8(0xff, 0x00, 0x00)));
+        render_context.fill(&red_star, solid_red);
 
         // Draw a black outline using the path.
-        let outline = render_context.solid_brush(piet::Color::rgb8(0x00, 0x00, 0x00));
-        render_context.stroke(&red_star, &outline, 5.0);
+        let outline = outline
+            .get_or_insert_with(|| render_context.solid_brush(piet::Color::rgb8(0x00, 0x00, 0x00)));
+        render_context.stroke(&red_star, outline, 5.0);
 
         // Test the transform.
         render_context
-            .with_save(|rc| {
+            .with_save(|render_context| {
                 let rot = ((tick * 2) % 360) as f64 / 180.0 * std::f64::consts::PI;
                 let trans =
                     Affine::scale(0.75) * Affine::translate((750.0, 275.0)) * Affine::rotate(rot);
-                let solid = rc.solid_brush(piet::Color::rgb8(0x00, 0xff, 0x00));
+                let solid = radial_gradient
+                    .get_or_insert_with(|| render_context.solid_brush(piet::Color::GREEN));
 
-                rc.transform(trans);
-                rc.fill(&star, &solid);
-                rc.stroke(&star, &outline, 5.0);
+                render_context.transform(trans);
+                render_context.fill(&star, solid);
+                render_context.stroke(&star, outline, 5.0);
 
                 Ok(())
             })
@@ -90,13 +96,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap()
         });
 
-        let posn_shift_x = ((tick as f64) / 25.0).cos() * 50.0;
-        let posn_shift_y = ((tick as f64) / 25.0).sin() * 50.0;
-        let posn_x = posn_shift_x + 400.0;
-        let posn_y = posn_shift_y + 400.0;
+        let scale = |x: f64| (x + 1.0) * 50.0;
+        let posn_shift_x = scale(((tick as f64) / 25.0).cos());
+        let posn_shift_y = scale(((tick as f64) / 25.0).sin());
+        let posn_x = posn_shift_x + 350.0;
+        let posn_y = posn_shift_y + 350.0;
 
-        let size_shift_x = ((tick as f64) / 50.0).cos() * 50.0;
-        let size_shift_y = ((tick as f64) / 50.0).sin() * 50.0;
+        let size_shift_x = ((tick as f64) / 50.0).cos() * 25.0;
+        let size_shift_y = ((tick as f64) / 50.0).sin() * 25.0;
 
         render_context.draw_image(
             image,
@@ -109,18 +116,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             piet::InterpolationMode::Bilinear,
         );
 
-        // Draw a subsection of the image.
+        // Also draw a subregion of the image.
+        let out_rect = Rect::new(100.0, 400.0, 200.0, 500.0);
         render_context.draw_image_area(
             image,
             Rect::new(
                 25.0 + posn_shift_x,
                 25.0 + posn_shift_y,
-                50.0 + posn_shift_x,
-                50.0 + posn_shift_y,
+                100.0 + posn_shift_x,
+                100.0 + posn_shift_y,
             ),
-            Rect::new(0.0, 0.0, 100.0, 100.0),
+            out_rect,
             piet::InterpolationMode::Bilinear,
         );
+        render_context.stroke(out_rect, outline, 3.0);
 
         // Panic on any errors.
         render_context.finish().unwrap();
