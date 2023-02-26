@@ -65,24 +65,34 @@ mod util {
         let (mut window, gl_config) = display.build(
             &event_loop,
             ConfigTemplateBuilder::new()
-                .with_alpha_size(8)
-                .with_transparency(cfg!(target_vendor = "apple")),
+                .with_alpha_size(8),
             |configs| {
                 configs
-                    .max_by_key(|config| {
-                        // Get the sample count.
-                        let mut score = config.num_samples() as u32;
+                    .reduce(|accum, config| {
+                    let transparency_check = config.supports_transparency().unwrap_or(false)
+                        & !accum.supports_transparency().unwrap_or(false);
 
-                        // Overwhelmingly prefer a config with transparency.
-                        if config.supports_transparency().unwrap_or(false) {
-                            score += 1_000;
-                        }
-
-                        score
-                    })
-                    .unwrap()
+                    if transparency_check || config.num_samples() > accum.num_samples() {
+                        config
+                    } else {
+                        accum
+                    }
+                }).unwrap()
             },
         )?;
+
+        println!("Config: {:?}", &gl_config);
+        println!("Color Buffer Type: {:?}", gl_config.color_buffer_type());
+        println!("Float Pixels: {:?}", gl_config.float_pixels());
+        println!("Alpha Size: {:?}", gl_config.alpha_size());
+        println!("Depth Size: {:?}", gl_config.depth_size());
+        println!("Stencil Size: {:?}", gl_config.stencil_size());
+        println!("Samples: {:?}", gl_config.num_samples());
+        println!("SRGB Capable: {:?}", gl_config.srgb_capable());
+        println!("Supports Transparency: {:?}", gl_config.supports_transparency());
+        println!("Hardware Accelerated: {:?}", gl_config.hardware_accelerated());
+        println!("Config Surface Types: {:?}", gl_config.config_surface_types());
+        println!("Api: {:?}", gl_config.api());
 
         // Try to build a several different contexts.
         let window_handle = window.as_ref().map(|w| w.raw_window_handle());
