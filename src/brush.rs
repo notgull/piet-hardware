@@ -680,7 +680,7 @@ impl FragmentBuilder {
             void main() {{
                 vec4 colorOutput = {GET_COLOR}();
                 float alphaMask = {GET_MASK_ALPHA}();
-                colorOutput.g += alphaMask;
+                colorOutput.a *= alphaMask;
                 {color_output} = colorOutput;
             }}
             ",

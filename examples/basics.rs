@@ -149,11 +149,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         render_context.stroke(out_rect, outline, 3.0);
 
-        render_context.fill(
-            Rect::new(0.0, 0.0, width as f64, height as f64),
-            &piet::Color::rgb8(0x00, 0x00, 0xFF),
-        );
-
         // Panic on any errors.
         render_context.finish().unwrap();
         render_context.status().unwrap();
