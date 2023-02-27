@@ -556,7 +556,10 @@ impl<H: HasContext + ?Sized, B: Borrow<Texture<H>>> BoundTexture<H, B> {
         let format = match format {
             ImageFormat::Grayscale => glow::RED,
             ImageFormat::Rgb => glow::RGB,
-            ImageFormat::RgbaSeparate => glow::RGBA,
+            ImageFormat::RgbaSeparate | ImageFormat::RgbaPremul => {
+                // TODO: This is probably more subtle than this in practice!
+                glow::RGBA
+            },
             _ => return Err(Error::NotSupported),
         };
 

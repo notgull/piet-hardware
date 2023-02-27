@@ -277,7 +277,8 @@ impl<H: HasContext + ?Sized> Brushes<H> {
         // Set the Mask values.
         if let (Some(mask), Some((mask_mvp_uniform, texture_mask_uniform))) = (mask, mask_uniforms)
         {
-            program.register_mat3(&mask_mvp_uniform, mask.transform);
+            let total_transform = *mask.transform * sized_transform(window_size);
+            program.register_mat3(&mask_mvp_uniform, &total_transform);
 
             let mut bound = mask.texture.bind(Some(0));
             program.register_texture(&texture_mask_uniform, &mut bound);
@@ -519,7 +520,11 @@ impl VertexBuilder {
             // Set up tex coords.
             writeln!(
                 source,
-                "    {MASK_COORDS} = ({MASK_MVP} * vec3({IN_POSITION}, 1.0)).xy;"
+                "    
+                    vec3 mCoords = {MASK_MVP} * vec3({IN_POSITION}, 1.0);
+                    mCoords /= mCoords.z;
+                    {MASK_COORDS} = mCoords.xy;
+                "
             )
             .unwrap();
         }
@@ -588,7 +593,8 @@ impl FragmentBuilder {
             uniform vec4 {SOLID_COLOR};
 
             vec4 {GET_COLOR}() {{
-                return {SOLID_COLOR};
+                vec4 color = {SOLID_COLOR};
+                return color;
             }}
         "
         )
@@ -630,12 +636,11 @@ impl FragmentBuilder {
             self.source,
             "
             in vec2 {MASK_COORDS};
-            uniform mat3 {MASK_MVP};
             uniform sampler2D {TEXTURE_MASK};
 
             float {GET_MASK_ALPHA}() {{
-                vec2 coords = ({MASK_MVP} * vec3(gl_FragCoord.xy, 1.0)).xy;
-                return texture2D({TEXTURE_MASK}, coords).g; 
+                vec2 coords = {MASK_COORDS};
+                return texture2D({TEXTURE_MASK}, coords).r;
             }}
         "
         )
@@ -675,9 +680,7 @@ impl FragmentBuilder {
             void main() {{
                 vec4 colorOutput = {GET_COLOR}();
                 float alphaMask = {GET_MASK_ALPHA}();
-                colorOutput.a *= alphaMask;
-
-                // Multiply with existing color.
+                colorOutput.g += alphaMask;
                 {color_output} = colorOutput;
             }}
             ",

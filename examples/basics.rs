@@ -19,7 +19,7 @@
 
 include!("util/setup_context.rs");
 
-use piet::kurbo::{Affine, BezPath, Circle, Point, Rect, Shape, Vec2};
+use piet::kurbo::{Affine, BezPath, Point, Rect, Vec2};
 use piet::{GradientStop, RenderContext as _};
 
 use std::path::Path;
@@ -27,7 +27,6 @@ use std::path::Path;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A path representing a star.
     let star = generate_five_pointed_star(Point::new(0.0, 0.0), 75.0, 150.0);
-    let circle_path = Circle::new(Point::new(200.0, 200.0), 150.0);
     let mut tick = 0;
 
     // Get the test image at $CRATE_ROOT/examples/assets/test-image.png
@@ -49,8 +48,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Clear the screen to a light blue.
         render_context.clear(None, piet::Color::rgb8(0x87, 0xce, 0xeb));
 
-        // Add a clip.
-        //render_context.clip(circle_path);
         let red_star = {
             let rot = (tick % 360) as f64 / 180.0 * std::f64::consts::PI;
             let transform = Affine::translate((200.0, 200.0)) * Affine::rotate(rot);
@@ -73,9 +70,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let rot = ((tick * 2) % 360) as f64 / 180.0 * std::f64::consts::PI;
                 let trans =
                     Affine::scale(0.75) * Affine::translate((750.0, 275.0)) * Affine::rotate(rot);
-                let solid = radial_gradient.get_or_insert_with(|| {
+                let gradient = radial_gradient.get_or_insert_with(|| {
                     let grad = piet::FixedRadialGradient {
-                        center: Point::new(0.0, 0.0),
+                        center: Point::new(300.0, 400.0),
                         origin_offset: Vec2::new(0.0, 0.0),
                         radius: 150.0,
                         stops: vec![
@@ -98,7 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
 
                 render_context.transform(trans);
-                render_context.fill(&star, solid);
+                render_context.fill(&star, gradient);
                 render_context.stroke(&star, outline, 5.0);
 
                 Ok(())
@@ -151,6 +148,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             piet::InterpolationMode::Bilinear,
         );
         render_context.stroke(out_rect, outline, 3.0);
+
+        render_context.fill(
+            Rect::new(0.0, 0.0, width as f64, height as f64),
+            &piet::Color::rgb8(0x00, 0x00, 0xFF),
+        );
 
         // Panic on any errors.
         render_context.finish().unwrap();
