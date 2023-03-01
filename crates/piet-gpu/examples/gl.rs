@@ -33,7 +33,6 @@ use glutin_winit::{DisplayBuilder, GlWindow};
 
 use piet::kurbo::{Affine, BezPath, Point, Rect, Vec2};
 use piet::{GradientStop, RenderContext as _};
-use piet_gpu::BufferType;
 
 use raw_window_handle::HasRawWindowHandle;
 
@@ -48,13 +47,15 @@ use std::fmt;
 use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
 
+const TEST_IMAGE: &[u8] = include_bytes!("test-image.png");
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     // Create the winit event loop.
     let event_loop = EventLoop::new();
 
-    let mut size = PhysicalSize::new(600, 400);
+    let mut size = PhysicalSize::new(800, 600);
     let make_window_builder = move || {
         WindowBuilder::new()
             .with_title("piet-gpu example")
@@ -129,28 +130,101 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut renderer = None;
     let mut not_current_gl_context = Some(gl_handler);
 
+    // Load the image.
+    let (image_width, image_height, image_data) = {
+        let image = image::load_from_memory(TEST_IMAGE).unwrap();
+        let image = image.to_rgba8();
+
+        let (width, height) = image.dimensions();
+        let data = image.into_raw();
+        (width, height, data)
+    };
+
     // Drawing data.
     let star = generate_five_pointed_star((0.0, 0.0).into(), 75.0, 150.0);
     let mut solid_red = None;
     let mut outline = None;
+    let mut image = None;
     let mut tick = 0;
 
     // Draw the window.
     let mut draw = move |ctx: &mut piet_gpu::RenderContext<'_, GlContext>| {
         ctx.clear(None, piet::Color::AQUA);
 
-        let rotated_star = {
-            let rotation = Affine::rotate((tick as f64) * 0.02);
-            let translation = Affine::translate((200.0, 200.0));
-
-            let transform = translation * rotation;
-            transform * &star
-        };
-        let solid_red = solid_red.get_or_insert_with(|| ctx.solid_brush(piet::Color::rgb8(0xe5, 0x39, 0xcd)));
         let outline = outline.get_or_insert_with(|| ctx.solid_brush(piet::Color::BLACK));
 
-        ctx.fill(&rotated_star, solid_red);
-        ctx.stroke(&rotated_star, outline, 5.0);
+        // Draw a rotating star.
+        ctx.with_save(|ctx| {
+            ctx.transform({
+                let rotation = Affine::rotate((tick as f64) * 0.02);
+                let translation = Affine::translate((200.0, 200.0));
+
+                translation * rotation
+            });
+
+            let solid_red = solid_red
+                .get_or_insert_with(|| ctx.solid_brush(piet::Color::rgb8(0x39, 0xe5, 0x8a)));
+
+            ctx.fill(&star, solid_red);
+            ctx.stroke(&star, outline, 5.0);
+
+            Ok(())
+        })
+        .unwrap();
+
+        // Draw a moving image.
+        {
+            let cos_curve = |x: f64, amp: f64, freq: f64| {
+                let x = x * std::f64::consts::PI * freq;
+                x.cos() * amp
+            };
+            let sin_curve = |x: f64, amp: f64, freq: f64| {
+                let x = x * std::f64::consts::PI * freq;
+                x.sin() * amp
+            };
+
+            let posn_shift_x = cos_curve(tick as f64, 50.0, 0.01);
+            let posn_shift_y = sin_curve(tick as f64, 50.0, 0.01);
+            let posn_x = 450.0 + posn_shift_x;
+            let posn_y = 150.0 + posn_shift_y;
+
+            let size_shift_x = cos_curve(tick as f64, 25.0, 0.02);
+            let size_shift_y = sin_curve(tick as f64, 25.0, 0.02);
+            let size_x = 100.0 + size_shift_x;
+            let size_y = 100.0 + size_shift_y;
+
+            let target_rect = Rect::new(posn_x, posn_y, posn_x + size_x, posn_y + size_y);
+
+            let image_handle = image.get_or_insert_with(|| {
+                ctx.make_image(
+                    image_width as usize,
+                    image_height as usize,
+                    &image_data,
+                    piet::ImageFormat::RgbaSeparate,
+                )
+                .unwrap()
+            });
+
+            ctx.draw_image(image_handle, target_rect, piet::InterpolationMode::Bilinear);
+
+            // Also draw a subset of the image.
+            let source_rect = Rect::new(
+                25.0 + posn_shift_x,
+                25.0 + posn_shift_y,
+                100.0 + posn_shift_x,
+                100.0 + posn_shift_y,
+            );
+
+            let target_rect = Rect::from_origin_size((625.0, 50.0), (100.0, 100.0));
+
+            ctx.draw_image_area(
+                image_handle,
+                source_rect,
+                target_rect,
+                piet::InterpolationMode::Bilinear,
+            );
+            ctx.stroke(target_rect, outline, 5.0);
+        }
 
         tick += 1;
         ctx.finish().unwrap();
@@ -350,6 +424,11 @@ impl GlContext {
 
             program
         };
+
+        // Enable wireframe mode.
+        //unsafe {
+        //    gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
+        //}
 
         unsafe {
             extern "system" fn debug_callback(
@@ -578,7 +657,7 @@ impl piet_gpu::GpuContext for GlContext {
         &self,
         texture: &Self::Texture,
         size: (u32, u32),
-        format: piet_gpu::ImageFormat,
+        format: piet::ImageFormat,
         data: Option<&[T]>,
     ) {
         self.assert_context();
@@ -587,7 +666,7 @@ impl piet_gpu::GpuContext for GlContext {
             gl::BindTexture(gl::TEXTURE_2D, *texture);
 
             let (internal_format, format, ty) = match format {
-                piet_gpu::ImageFormat::Rgba => (gl::RGBA8, gl::RGBA, gl::UNSIGNED_BYTE),
+                piet::ImageFormat::RgbaSeparate => (gl::RGBA8, gl::RGBA, gl::UNSIGNED_BYTE),
                 _ => panic!("unsupported image format"),
             };
 
@@ -615,7 +694,7 @@ impl piet_gpu::GpuContext for GlContext {
         texture: &Self::Texture,
         offset: (u32, u32),
         size: (u32, u32),
-        format: piet_gpu::ImageFormat,
+        format: piet::ImageFormat,
         data: &[T],
     ) {
         self.assert_context();
@@ -624,7 +703,7 @@ impl piet_gpu::GpuContext for GlContext {
             gl::BindTexture(gl::TEXTURE_2D, *texture);
 
             let (format, ty) = match format {
-                piet_gpu::ImageFormat::Rgba => (gl::RGBA, gl::UNSIGNED_BYTE),
+                piet::ImageFormat::RgbaSeparate => (gl::RGBA, gl::UNSIGNED_BYTE),
                 _ => panic!("unsupported image format"),
             };
 
@@ -749,12 +828,17 @@ impl piet_gpu::GpuContext for GlContext {
                 vao,
                 vbo,
                 ebo,
-                num_indices: Cell::new(0)
+                num_indices: Cell::new(0),
             })
         }
     }
 
-    fn write_vertices(&self, buffer: &Self::VertexBuffer, vertices: &[piet_gpu::Vertex], indices: &[u32]) {
+    fn write_vertices(
+        &self,
+        buffer: &Self::VertexBuffer,
+        vertices: &[piet_gpu::Vertex],
+        indices: &[u32],
+    ) {
         self.assert_context();
 
         unsafe {
@@ -810,15 +894,15 @@ impl piet_gpu::GpuContext for GlContext {
             ];
             gl::UniformMatrix3fv(self.u_transform, 1, gl::FALSE, transform.as_ptr());
 
-            // Set the mask texture.
-            gl::ActiveTexture(gl::TEXTURE0);
-            gl::BindTexture(gl::TEXTURE_2D, *mask_texture);
-            gl::Uniform1i(self.mask, 0);
-
             // Set the texture.
             gl::ActiveTexture(gl::TEXTURE1);
             gl::BindTexture(gl::TEXTURE_2D, *current_texture);
             gl::Uniform1i(self.tex, 1);
+
+            // Set the mask texture.
+            gl::ActiveTexture(gl::TEXTURE0);
+            gl::BindTexture(gl::TEXTURE_2D, *mask_texture);
+            gl::Uniform1i(self.mask, 0);
 
             // Set the blend mode.
             gl::Enable(gl::BLEND);
@@ -889,14 +973,19 @@ void main() {
     // Transform the vertex position.
     vec3 pos = transform * vec3(aPos, 1.0);
     pos /= pos.z;
-    fMaskCoord = pos.xy;
 
-    // Clamp to the viewport size.
+    // Transform to screen-space coordinates.
     gl_Position = vec4(
         (2.0 * pos.x / viewportSize.x) - 1.0,
         1.0 - (2.0 * pos.y / viewportSize.y),
         0.0,
         1.0
+    );
+
+    // Transform to mask-space coordinates.
+    fMaskCoord = vec2(
+        pos.x / viewportSize.x,
+        1.0 - (pos.y / viewportSize.y)
     );
 
     rgbaColor = aColor / 255.0;
@@ -916,14 +1005,10 @@ uniform sampler2D mask;
 
 void main() {
     vec4 textureColor = texture2D(tex, fTexCoord);
-    vec4 mainColor = (rgbaColor * 0.99) + (textureColor * 0.01);
+    vec4 mainColor = rgbaColor * textureColor;
 
-    float maskAlpha = texture2D(mask, fMaskCoord).a;
-    maskAlpha += 1.0;
-    vec4 finalColor = vec4(
-        mainColor.rgb,
-        mainColor.a + maskAlpha
-    );
+    vec4 maskColor = texture2D(mask, fMaskCoord);
+    vec4 finalColor = mainColor * maskColor;
 
     gl_FragColor = finalColor;
 }

@@ -2,6 +2,7 @@
 name = "piet-gpu"
 version = "0.1.0"
 edition = "2021"
+license = "LGPL-3.0-or-later OR MPL-2.0"
 
 [dependencies]
 arrayvec = "0.7.2"
@@ -18,6 +19,7 @@ env_logger = { version = "0.10.0", default-features = false, features = ["auto-c
 gl = "0.14.0"
 glutin = { version = "0.30.6", default-features = false, features = ["x11", "glx", "egl", "wgl"] }
 glutin-winit = { version = "0.3.0", default-features = false, features = ["x11", "egl", "glx", "wgl"] }
+image = { version = "0.24.5", default-features = false, features = ["png"] }
 log = "0.4.17"
 raw-window-handle = { version = "0.5.0", default-features = false }
 winit = { version = "0.28.1", default-features = false, features = ["x11"] }

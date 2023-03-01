@@ -40,10 +40,10 @@
 
 #![forbid(unsafe_code)]
 
+pub use piet;
 pub use piet_cosmic_text;
 
 use arrayvec::ArrayVec;
-use bytemuck::offset_of;
 use etagere::AtlasAllocator;
 
 use lyon_tessellation::path::{Event, PathEvent};
@@ -55,12 +55,11 @@ use lyon_tessellation::{
 use piet::kurbo::{Affine, PathEl, Point, Rect, Shape, Size};
 use piet::{Error as Pierror, InterpolationMode, LineCap, LineJoin};
 
-use tiny_skia::{ClipMask, PathBuilder, Stroke};
+use tiny_skia::{ClipMask, Paint, PathBuilder, Pixmap, PixmapRef, Shader};
 use tinyvec::TinyVec;
 
-use core::num;
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 use std::error::Error as StdError;
 use std::fmt;
 use std::mem;
@@ -76,7 +75,7 @@ pub trait GpuContext {
     type Texture;
 
     /// The type associated with a GPU vertex buffer.
-    /// 
+    ///
     /// Contains vertices, indices and any layout data.
     type VertexBuffer;
 
@@ -104,7 +103,7 @@ pub trait GpuContext {
         &self,
         texture: &Self::Texture,
         size: (u32, u32),
-        format: ImageFormat,
+        format: piet::ImageFormat,
         data: Option<&[T]>,
     );
 
@@ -114,7 +113,7 @@ pub trait GpuContext {
         texture: &Self::Texture,
         offset: (u32, u32),
         size: (u32, u32),
-        format: ImageFormat,
+        format: piet::ImageFormat,
         data: &[T],
     );
 
@@ -142,31 +141,6 @@ pub trait GpuContext {
         transform: &Affine,
         size: (u32, u32),
     ) -> Result<(), Self::Error>;
-}
-
-/// The image format to use for a texture.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
-pub enum ImageFormat {
-    /// Use RGBA pixels.
-    Rgba,
-
-    /// Use RGB pixels.
-    Rgb,
-
-    /// Use grayscale pixel.
-    Grayscale,
-}
-
-/// The type of interpolation to use when sampling a texture.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
-pub enum Interpolation {
-    /// Use nearest-neighbor interpolation.
-    Nearest,
-
-    /// Use Bilinear interpolation.
-    Bilinear,
 }
 
 /// The strategy to use for repeating.
@@ -292,11 +266,21 @@ struct Buffers<C: GpuContext + ?Sized> {
     vbo: VertexBuffer<C>,
 }
 
+struct Atlas<C: GpuContext + ?Sized> {
+    /// The texture atlas.
+    texture: Texture<C>,
+
+    /// The allocator for the texture atlas.
+    allocator: AtlasAllocator,
+}
+
 impl<C: GpuContext + ?Sized> Source<C> {
     /// Create a new source from a context wrapped in an `Rc`.
     pub fn from_rc(context: Rc<C>) -> Result<Self, Pierror> {
         Ok(Self {
             white_pixel: {
+                const WHITE: [u8; 4] = [0xFF; 4];
+
                 // Setup a white pixel texture.
                 let texture = Texture::new(
                     &context,
@@ -305,7 +289,7 @@ impl<C: GpuContext + ?Sized> Source<C> {
                 )
                 .piet_err()?;
 
-                texture.write_texture((500, 500), ImageFormat::Rgba, Some(&[255, 255, 255, 255]));
+                texture.write_texture((1, 1), piet::ImageFormat::RgbaSeparate, Some(&WHITE));
 
                 texture
             },
@@ -433,7 +417,7 @@ impl<C: GpuContext + ?Sized> Mask<C> {
             let data = self.pixmap.data();
             self.texture.write_texture(
                 (self.pixmap.width(), self.pixmap.height()),
-                ImageFormat::Rgba,
+                piet::ImageFormat::RgbaSeparate,
                 Some(data),
             );
 
@@ -533,7 +517,7 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
             .piet_err()?;
 
         // Push the incoming buffers.
-        self.push_buffers(brush.0.texture())
+        self.push_buffers(brush.0.texture().as_ref().map(|t| &*t.texture))
     }
 
     fn stroke_impl(
@@ -590,16 +574,16 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
             .piet_err()?;
 
         // Push the incoming buffers.
-        self.push_buffers(brush.0.texture())
+        self.push_buffers(brush.0.texture().as_ref().map(|t| &*t.texture))
     }
 
     /// Push the values currently in the renderer to the GPU.
     fn push_buffers(&mut self, texture: Option<&Texture<C>>) -> Result<(), Pierror> {
         // Upload the vertex and index buffers.
-        self.source
-            .buffers
-            .vbo
-            .upload(&self.source.buffers.vertex_buffers.vertices, &self.source.buffers.vertex_buffers.indices);
+        self.source.buffers.vbo.upload(
+            &self.source.buffers.vertex_buffers.vertices,
+            &self.source.buffers.vertex_buffers.indices,
+        );
 
         // Decide which mask and transform to use.
         let (transform, mask) = {
@@ -615,8 +599,6 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
 
         // Decide the texture to use.
         let texture = texture.unwrap_or(&self.source.white_pixel);
-
-        let num_indices = self.source.buffers.vertex_buffers.indices.len();
 
         // Draw!
         self.source
@@ -694,7 +676,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         }
 
         // Otherwise, fall back to filling in the screen rectangle.
-        if let Err(e) = self.fill_rects(
+        let result = self.fill_rects(
             {
                 let uv_white = Point::new(UV_WHITE[0] as f64, UV_WHITE[1] as f64);
                 &[(
@@ -706,9 +688,9 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
             },
             color,
             None,
-        ) {
-            self.status = Err(e);
-        }
+        );
+
+        leap!(self, result);
     }
 
     fn stroke(&mut self, shape: impl Shape, brush: &impl piet::IntoBrush<Self>, width: f64) {
@@ -849,7 +831,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         )
         .piet_err()?;
 
-        tex.write_texture((width as u32, height as u32), todo!(), Some(buf));
+        tex.write_texture((width as u32, height as u32), format, Some(buf));
 
         Ok(Image {
             texture: Rc::new(tex),
@@ -863,7 +845,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         dst_rect: impl Into<Rect>,
         interp: piet::InterpolationMode,
     ) {
-        todo!()
+        self.draw_image_area(image, Rect::ZERO.with_size(image.size), dst_rect, interp)
     }
 
     fn draw_image_area(
@@ -873,7 +855,32 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         dst_rect: impl Into<Rect>,
         interp: piet::InterpolationMode,
     ) {
-        todo!()
+        // Create a rectangle for the destination and a rectangle for UV.
+        let pos_rect = dst_rect.into();
+        let uv_rect = {
+            let scale_x = 1.0 / image.size.width;
+            let scale_y = 1.0 / image.size.height;
+
+            let src_rect = src_rect.into();
+            Rect::new(
+                src_rect.x0 * scale_x,
+                src_rect.y0 * scale_y,
+                src_rect.x1 * scale_x,
+                src_rect.y1 * scale_y,
+            )
+        };
+
+        // Set the interpolation mode.
+        image.texture.set_interpolation(interp);
+
+        // Use this to draw the image.
+        if let Err(e) = self.fill_rects(
+            &[(pos_rect, uv_rect)],
+            piet::Color::WHITE,
+            Some(&image.texture),
+        ) {
+            self.status = Err(e);
+        }
     }
 
     fn capture_image_area(&mut self, _src_rect: impl Into<Rect>) -> Result<Self::Image, Pierror> {
@@ -910,10 +917,7 @@ enum BrushInner<C: GpuContext + ?Sized> {
     /// A texture to apply.
     Texture {
         /// The image to apply.
-        image: Image<C>,
-
-        /// The source rectangle of the image to apply.
-        source: Rect,
+        image: RefCell<Image<C>>,
     },
 }
 
@@ -929,10 +933,10 @@ impl<C: GpuContext + ?Sized> piet::IntoBrush<RenderContext<'_, C>> for Brush<C> 
 
 impl<C: GpuContext + ?Sized> BrushInner<C> {
     /// Get the texture associated with this brush.
-    fn texture(&self) -> Option<&Texture<C>> {
+    fn texture(&self) -> Option<Ref<'_, Image<C>>> {
         match self {
             Self::Solid(_) => None,
-            Self::Texture { image, .. } => Some(&image.texture),
+            Self::Texture { image, .. } => Some(image.borrow()),
         }
     }
 
@@ -948,12 +952,16 @@ impl<C: GpuContext + ?Sized> BrushInner<C> {
                 },
             },
 
-            Self::Texture { image, source } => {
+            Self::Texture { image } => {
                 // Create a transform to convert from image coordinates to
                 // UV coordinates.
+                let image = image.borrow();
+                let uv_transform =
+                    Affine::scale_non_uniform(1.0 / image.size.width, 1.0 / image.size.height);
+                let uv = uv_transform * Point::new(point[0] as f64, point[1] as f64);
                 Vertex {
                     pos: point,
-                    uv: todo!(),
+                    uv: [uv.x as f32, uv.y as f32],
                     color: [0xFF, 0xFF, 0xFF, 0xFF],
                 }
             }
@@ -965,9 +973,8 @@ impl<C: GpuContext + ?Sized> Clone for BrushInner<C> {
     fn clone(&self) -> Self {
         match self {
             Self::Solid(color) => Self::Solid(*color),
-            Self::Texture { image, source } => Self::Texture {
-                image: image.clone(),
-                source: *source,
+            Self::Texture { image } => Self::Texture {
+                image: RefCell::new(image.borrow().clone()),
             },
         }
     }
@@ -1048,10 +1055,46 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         Ok(Self::from_raw(context, resource))
     }
 
+    fn from_shader(
+        context: &Rc<C>,
+        shader: Shader<'_>,
+        (width, height): (u32, u32),
+    ) -> Result<Self, C::Error> {
+        // Create the texture.
+        let texture = Self::new(
+            context,
+            InterpolationMode::Bilinear,
+            RepeatStrategy::Color(piet::Color::TRANSPARENT),
+        )?;
+
+        // Create a pixmap to render the shader into.
+        let mut pixmap = Pixmap::new(width, height).expect("failed to create pixmap");
+
+        // Render the shader into the pixmap.
+        let paint = Paint {
+            shader,
+            ..Default::default()
+        };
+        pixmap
+            .fill_rect(
+                tiny_skia::Rect::from_xywh(0.0, 0.0, width as _, height as _).unwrap(),
+                &paint,
+                tiny_skia::Transform::identity(),
+                None,
+            )
+            .expect("failed to render shader");
+
+        // Write the pixmap into the texture.
+        let data = pixmap.take();
+        texture.write_texture((width, height), piet::ImageFormat::RgbaPremul, Some(&data));
+
+        Ok(texture)
+    }
+
     fn write_texture<T: bytemuck::Pod>(
         &self,
         size: (u32, u32),
-        format: ImageFormat,
+        format: piet::ImageFormat,
         data: Option<&[T]>,
     ) {
         self.context
@@ -1062,11 +1105,16 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         &self,
         offset: (u32, u32),
         size: (u32, u32),
-        format: ImageFormat,
+        format: piet::ImageFormat,
         data: &[T],
     ) {
         self.context
             .write_subtexture(self.resource(), offset, size, format, data);
+    }
+
+    fn set_interpolation(&self, interpolation: InterpolationMode) {
+        self.context
+            .set_texture_interpolation(self.resource(), interpolation);
     }
 }
 
