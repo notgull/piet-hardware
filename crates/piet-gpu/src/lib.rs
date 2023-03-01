@@ -58,6 +58,7 @@ use piet::{Error as Pierror, InterpolationMode, LineCap, LineJoin};
 use tiny_skia::{ClipMask, PathBuilder, Stroke};
 use tinyvec::TinyVec;
 
+use core::num;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::error::Error as StdError;
@@ -74,13 +75,11 @@ pub trait GpuContext {
     /// The type associated with a GPU texture.
     type Texture;
 
-    /// The type associated with a GPU buffer.
-    ///
-    /// This buffer can contain either `Vertex`es or `u16`s representing indices.
-    type Buffer;
+    /// The type associated with a GPU vertex buffer.
+    type VertexBuffer;
 
-    /// The type associated with a GPU vertex array.
-    type VertexArray;
+    /// The type associated with a GPU index buffer.
+    type IndexBuffer;
 
     /// The error type associated with this GPU context.
     type Error: StdError + 'static;
@@ -126,55 +125,35 @@ pub trait GpuContext {
     /// Get the maximum texture size.
     fn max_texture_size(&self) -> (u32, u32);
 
-    /// Create a new buffer.
-    fn create_buffer(&self) -> Result<Self::Buffer, Self::Error>;
+    /// Create a new vertex buffer.
+    fn create_vertex_buffer(&self) -> Result<Self::VertexBuffer, Self::Error>;
 
-    /// Write data to a buffer.
-    fn write_buffer<T: bytemuck::Pod>(
-        &self,
-        buffer: &Self::Buffer,
-        data: &[T],
-        ty: BufferType,
-    ) -> Result<(), Self::Error>;
+    /// Delete a vertex buffer.
+    fn delete_vertex_buffer(&self, buffer: Self::VertexBuffer);
 
-    /// Delete a buffer.
-    fn delete_buffer(&self, buffer: Self::Buffer);
+    /// Write vertices to a vertex buffer.
+    fn write_vertices(&self, buffer: &Self::VertexBuffer, vertices: &[Vertex]);
 
-    /// Create a new vertex array.
-    fn create_vertex_array(
-        &self,
-        buffer: &Self::Buffer,
-        formats: &[VertexFormat],
-    ) -> Result<Self::VertexArray, Self::Error>;
+    /// Create a new index buffer.
+    fn create_index_buffer(&self) -> Result<Self::IndexBuffer, Self::Error>;
 
-    /// Delete a vertex array.
-    fn delete_vertex_array(&self, vertex_array: Self::VertexArray);
+    /// Delete an index buffer.
+    fn delete_index_buffer(&self, buffer: Self::IndexBuffer);
+
+    /// Write indices to an index buffer.
+    fn write_indices(&self, buffer: &Self::IndexBuffer, indices: &[u32]);
 
     /// Push buffer data to the GPU.
     fn push_buffers(
         &self,
-        draw_buffers: DrawBuffers<'_, Self>,
+        vertex_buffer: &Self::VertexBuffer,
+        index_buffer: &Self::IndexBuffer,
+        num_indices: usize,
         current_texture: &Self::Texture,
         mask_texture: &Self::Texture,
         transform: &Affine,
         size: (u32, u32),
     ) -> Result<(), Self::Error>;
-}
-
-/// The buffers to draw from.
-#[derive(Debug, Clone, Copy)]
-pub struct DrawBuffers<'a, C: GpuContext + ?Sized> {
-    /// The vertex array to draw from.
-    pub vertex_array: &'a C::VertexArray,
-
-    /// The vertex buffer to draw from.
-    pub vertex_buffer: &'a C::Buffer,
-
-    /// The index buffer to draw from.
-    pub index_buffer: &'a C::Buffer,
-
-    /// The number of indices to draw.
-    pub num_indices: usize,
 }
 
 /// The image format to use for a texture.
@@ -297,7 +276,7 @@ pub struct Source<C: GpuContext + ?Sized> {
     buffers: Buffers<C>,
 
     /// The text API.
-    text: Text,
+    //text: Text,
 
     /// A cached path buffer.
     path_builder: PathBuilder,
@@ -322,13 +301,10 @@ struct Buffers<C: GpuContext + ?Sized> {
     stroke_tesselator: StrokeTessellator,
 
     /// The VBO for vertices.
-    vbo: Buffer<C>,
+    vbo: VertexBuffer<C>,
 
     /// The EB0 for indices.
-    ebo: Buffer<C>,
-
-    /// The VAO for the buffers.
-    vao: VertexArray<C>,
+    ebo: IndexBuffer<C>,
 }
 
 impl<C: GpuContext + ?Sized> Source<C> {
@@ -349,36 +325,8 @@ impl<C: GpuContext + ?Sized> Source<C> {
                 texture
             },
             buffers: {
-                let vbo = Buffer::new(&context).piet_err()?;
-                let ebo = Buffer::new(&context).piet_err()?;
-
-                // Keep in sync with the buffer struct.
-                let stride = mem::size_of::<Vertex>() as u32;
-                let layout = &[
-                    VertexFormat {
-                        data_type: DataType::Position,
-                        format: DataFormat::Float,
-                        num_components: 2,
-                        offset: offset_of!(Vertex, pos) as u32,
-                        stride: mem::size_of::<Vertex>() as u32,
-                    },
-                    VertexFormat {
-                        data_type: DataType::Texture,
-                        format: DataFormat::Float,
-                        num_components: 2,
-                        offset: offset_of!(Vertex, uv) as u32,
-                        stride: mem::size_of::<Vertex>() as u32,
-                    },
-                    VertexFormat {
-                        data_type: DataType::Color,
-                        format: DataFormat::UnsignedByte,
-                        num_components: 4,
-                        offset: offset_of!(Vertex, color) as u32,
-                        stride: mem::size_of::<Vertex>() as u32,
-                    },
-                ];
-
-                let vao = VertexArray::new(&context, &vbo, layout).piet_err()?;
+                let vbo = VertexBuffer::new(&context).piet_err()?;
+                let ebo = IndexBuffer::new(&context).piet_err()?;
 
                 Buffers {
                     vertex_buffers: VertexBuffers::new(),
@@ -386,11 +334,10 @@ impl<C: GpuContext + ?Sized> Source<C> {
                     stroke_tesselator: StrokeTessellator::new(),
                     vbo,
                     ebo,
-                    vao,
                 }
             },
             context,
-            text: Text::new(),
+            //text: Text::new(),
             path_builder: PathBuilder::new(),
         })
     }
@@ -665,46 +612,16 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
 
     /// Push the values currently in the renderer to the GPU.
     fn push_buffers(&mut self, texture: Option<&Texture<C>>) -> Result<(), Pierror> {
-        let _tmp_vertices = [
-            Vertex {
-                pos: [-0.5, -0.5],
-                uv: [0.0, 0.0],
-                color: [255, 0, 0, 255],
-            },
-            Vertex {
-                pos: [0.5, -0.5],
-                uv: [0.0, 0.0],
-                color: [0, 255, 0, 255],
-            },
-            Vertex {
-                pos: [0.0, 0.5],
-                uv: [0.0, 0.0],
-                color: [0, 0, 255, 255],
-            },
-        ];
-
-        let _tmp_indices = [0, 1, 2];
-
         // Upload the vertex and index buffers.
         self.source
             .buffers
             .vbo
-            .upload(
-                //&self.source.buffers.vertex_buffers.vertices,
-                &_tmp_vertices,
-                BufferType::Vertex,
-            )
-            .piet_err()?;
+            .upload(&self.source.buffers.vertex_buffers.vertices);
 
         self.source
             .buffers
             .ebo
-            .upload(
-                //&self.source.buffers.vertex_buffers.indices,
-                &_tmp_indices,
-                BufferType::Index,
-            )
-            .piet_err()?;
+            .upload(&self.source.buffers.vertex_buffers.indices);
 
         // Decide which mask and transform to use.
         let (transform, mask) = {
@@ -721,30 +638,27 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
         // Decide the texture to use.
         let texture = texture.unwrap_or(&self.source.white_pixel);
 
-        // Draw the buffers.
-        let buffers = DrawBuffers {
-            vertex_array: self.source.buffers.vao.resource(),
-            vertex_buffer: self.source.buffers.vbo.resource(),
-            index_buffer: self.source.buffers.ebo.resource(),
-            num_indices: //self.source.buffers.vertex_buffers.indices.len(),
-            _tmp_indices.len()
-        };
-
-        // Clear the original buffers.
-        self.source.buffers.vertex_buffers.vertices.clear();
-        self.source.buffers.vertex_buffers.indices.clear();
+        let num_indices = self.source.buffers.vertex_buffers.indices.len();
 
         // Draw!
         self.source
             .context
             .push_buffers(
-                buffers,
+                self.source.buffers.vbo.resource(),
+                self.source.buffers.ebo.resource(),
+                num_indices,
                 texture.resource(),
                 mask.resource(),
                 transform,
                 self.size,
             )
-            .piet_err()
+            .piet_err()?;
+
+        // Clear the original buffers.
+        self.source.buffers.vertex_buffers.vertices.clear();
+        self.source.buffers.vertex_buffers.indices.clear();
+
+        Ok(())
     }
 }
 
@@ -912,7 +826,8 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
     }
 
     fn text(&mut self) -> &mut Self::Text {
-        &mut self.source.text
+        //&mut self.source.text
+        todo!()
     }
 
     fn draw_text(&mut self, layout: &Self::TextLayout, pos: impl Into<Point>) {
@@ -1144,8 +1059,8 @@ macro_rules! define_resource_wrappers {
 
 define_resource_wrappers! {
     Texture(Texture => delete_texture),
-    VertexArray(VertexArray => delete_vertex_array),
-    Buffer(Buffer => delete_buffer),
+    VertexBuffer(VertexBuffer => delete_vertex_buffer),
+    IndexBuffer(IndexBuffer => delete_index_buffer),
 }
 
 impl<C: GpuContext + ?Sized> Texture<C> {
@@ -1181,26 +1096,25 @@ impl<C: GpuContext + ?Sized> Texture<C> {
     }
 }
 
-impl<C: GpuContext + ?Sized> VertexArray<C> {
-    fn new(
-        context: &Rc<C>,
-        vertex_buffer: &Buffer<C>,
-        layouts: &[VertexFormat],
-    ) -> Result<Self, C::Error> {
-        let resource = context.create_vertex_array(vertex_buffer.resource(), layouts)?;
-
+impl<C: GpuContext + ?Sized> VertexBuffer<C> {
+    fn new(context: &Rc<C>) -> Result<Self, C::Error> {
+        let resource = context.create_vertex_buffer()?;
         Ok(Self::from_raw(context, resource))
+    }
+
+    fn upload(&self, data: &[Vertex]) {
+        self.context.write_vertices(self.resource(), data)
     }
 }
 
-impl<C: GpuContext + ?Sized> Buffer<C> {
+impl<C: GpuContext + ?Sized> IndexBuffer<C> {
     fn new(context: &Rc<C>) -> Result<Self, C::Error> {
-        let resource = context.create_buffer()?;
+        let resource = context.create_index_buffer()?;
         Ok(Self::from_raw(context, resource))
     }
 
-    fn upload<T: bytemuck::Pod>(&self, data: &[T], ty: BufferType) -> Result<(), C::Error> {
-        self.context.write_buffer(self.resource(), data, ty)
+    fn upload(&self, data: &[u32]) {
+        self.context.write_indices(self.resource(), data)
     }
 }
 

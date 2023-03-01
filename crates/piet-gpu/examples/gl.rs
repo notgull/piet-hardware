@@ -130,27 +130,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut not_current_gl_context = Some(gl_handler);
 
     // Drawing data.
-    let star = {
-        let mut path = BezPath::new();
-        path.move_to((300.0, 300.0));
-        path.line_to((400.0, 400.0));
-        path.line_to((300.0, 400.0));
-        path.close_path();
-        path
-    };
+    let star = generate_five_pointed_star((0.0, 0.0).into(), 75.0, 150.0);
     let mut solid_red = None;
     let mut outline = None;
+    let mut tick = 0;
 
     // Draw the window.
     let mut draw = move |ctx: &mut piet_gpu::RenderContext<'_, GlContext>| {
         ctx.clear(None, piet::Color::AQUA);
 
-        let solid_red = solid_red.get_or_insert_with(|| ctx.solid_brush(piet::Color::RED));
+        let rotated_star = {
+            let rotation = Affine::rotate((tick as f64) * 0.02);
+            let translation = Affine::translate((200.0, 200.0));
+
+            let transform = translation * rotation;
+            transform * &star
+        };
+        let solid_red = solid_red.get_or_insert_with(|| ctx.solid_brush(piet::Color::WHITE));
         let outline = outline.get_or_insert_with(|| ctx.solid_brush(piet::Color::BLACK));
 
-        ctx.fill(Rect::new(0.0, 0.0, 400.0, 400.0), solid_red);
-        //ctx.stroke(&star, outline, 5.0);
+        ctx.fill(&rotated_star, solid_red);
+        ctx.stroke(&rotated_star, outline, 5.0);
 
+        tick += 1;
         ctx.finish().unwrap();
         ctx.status()
     };
@@ -296,6 +298,17 @@ struct GlContext {
     mask: gl::types::GLint,
 }
 
+#[derive(Copy, Clone)]
+struct GlVertexBuffer {
+    vbo: gl::types::GLuint,
+    vao: gl::types::GLuint,
+}
+
+#[derive(Copy, Clone)]
+struct GlIndexBuffer {
+    ebo: gl::types::GLuint,
+}
+
 impl GlContext {
     fn assert_context(&self) {
         if !self.has_context.get() {
@@ -403,12 +416,12 @@ impl GlContext {
 
         // Get the uniform locations.
         let u_transform = unsafe {
-            let name = CString::new("u_transform").unwrap();
+            let name = CString::new("transform").unwrap();
             gl::GetUniformLocation(program, name.as_ptr())
         };
 
         let viewport_size = unsafe {
-            let name = CString::new("viewport_size").unwrap();
+            let name = CString::new("viewportSize").unwrap();
             gl::GetUniformLocation(program, name.as_ptr())
         };
 
@@ -421,6 +434,8 @@ impl GlContext {
             let name = CString::new("mask").unwrap();
             gl::GetUniformLocation(program, name.as_ptr())
         };
+
+        gl_error();
 
         Self {
             has_context: Cell::new(true),
@@ -487,10 +502,10 @@ impl fmt::Display for GlError {
 impl std::error::Error for GlError {}
 
 impl piet_gpu::GpuContext for GlContext {
-    type Buffer = gl::types::GLuint;
     type Error = GlError;
     type Texture = gl::types::GLuint;
-    type VertexArray = gl::types::GLuint;
+    type IndexBuffer = GlIndexBuffer;
+    type VertexBuffer = GlVertexBuffer;
 
     fn clear(&self, color: piet::Color) {
         self.assert_context();
@@ -499,6 +514,7 @@ impl piet_gpu::GpuContext for GlContext {
         unsafe {
             gl::ClearColor(r as f32, g as f32, b as f32, a as f32);
             gl::Clear(gl::COLOR_BUFFER_BIT);
+            gl_error();
         }
     }
 
@@ -507,6 +523,7 @@ impl piet_gpu::GpuContext for GlContext {
 
         unsafe {
             gl::Flush();
+            gl_error();
             Ok(())
         }
     }
@@ -516,6 +533,8 @@ impl piet_gpu::GpuContext for GlContext {
         interpolation: piet::InterpolationMode,
         repeat: piet_gpu::RepeatStrategy,
     ) -> Result<Self::Texture, Self::Error> {
+        self.assert_context();
+
         unsafe {
             let mut texture = 0;
             gl::GenTextures(1, &mut texture);
@@ -668,124 +687,136 @@ impl piet_gpu::GpuContext for GlContext {
         }
     }
 
-    fn create_buffer(&self) -> Result<Self::Buffer, Self::Error> {
+    fn create_vertex_buffer(&self) -> Result<Self::VertexBuffer, Self::Error> {
         self.assert_context();
 
         unsafe {
             let mut buffer = 0;
             gl::GenBuffers(1, &mut buffer);
-            Ok(buffer as _)
+
+            // Set up the vertex array object.
+            let mut vao = 0;
+            gl::GenVertexArrays(1, &mut vao);
+            gl::BindVertexArray(vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, buffer);
+
+            let stride = std::mem::size_of::<piet_gpu::Vertex>() as _;
+
+            // Set up the layout:
+            // - vec2 of floats for aPos
+            // - vec2 of floats for aTexCoord
+            // - vec4 of unsigned bytes for aColor
+            let apos_name = CString::new("aPos").unwrap();
+            let apos_coord = gl::GetAttribLocation(self.render_program, apos_name.as_ptr());
+            gl::EnableVertexAttribArray(apos_coord as _);
+            gl::VertexAttribPointer(
+                apos_coord as _,
+                2,
+                gl::FLOAT,
+                gl::FALSE,
+                stride,
+                bytemuck::offset_of!(piet_gpu::Vertex, pos) as *const _,
+            );
+
+            let atex_name = CString::new("aTexCoord").unwrap();
+            let atex_coord = gl::GetAttribLocation(self.render_program, atex_name.as_ptr() as _);
+            gl::EnableVertexAttribArray(atex_coord as _);
+            gl::VertexAttribPointer(
+                atex_coord as _,
+                2,
+                gl::FLOAT,
+                gl::FALSE,
+                stride,
+                bytemuck::offset_of!(piet_gpu::Vertex, uv) as *const _,
+            );
+
+            let acolor_name = CString::new("aColor").unwrap();
+            let acolor_coord = gl::GetAttribLocation(self.render_program, acolor_name.as_ptr());
+            gl::EnableVertexAttribArray(acolor_coord as _);
+            gl::VertexAttribPointer(
+                acolor_coord as _,
+                4,
+                gl::UNSIGNED_BYTE,
+                gl::FALSE,
+                stride,
+                bytemuck::offset_of!(piet_gpu::Vertex, color) as *const _,
+            );
+
+            // Unbind the vertex array object.
+            gl::BindVertexArray(0);
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+
+            Ok(GlVertexBuffer {
+                vao,
+                vbo: buffer as _,
+            })
         }
     }
 
-    fn write_buffer<T: bytemuck::Pod>(
-        &self,
-        buffer: &Self::Buffer,
-        data: &[T],
-        ty: BufferType,
-    ) -> Result<(), Self::Error> {
+    fn create_index_buffer(&self) -> Result<Self::IndexBuffer, Self::Error> {
         self.assert_context();
 
         unsafe {
-            let bind_location = match ty {
-                BufferType::Vertex => gl::ARRAY_BUFFER,
-                BufferType::Index => gl::ELEMENT_ARRAY_BUFFER,
-            };
+            let mut buffer = 0;
+            gl::GenBuffers(1, &mut buffer);
+            Ok(GlIndexBuffer { ebo: buffer as _ })
+        }
+    }
 
-            let len = (data.len() * std::mem::size_of::<T>()) as isize;
-            gl::BindBuffer(bind_location, *buffer);
+    fn write_vertices(&self, buffer: &Self::VertexBuffer, vertices: &[piet_gpu::Vertex]) {
+        self.assert_context();
+
+        unsafe {
+            gl::BindBuffer(gl::ARRAY_BUFFER, buffer.vbo);
             gl::BufferData(
-                bind_location,
-                len,
-                data.as_ptr() as *const _,
+                gl::ARRAY_BUFFER,
+                (vertices.len() * std::mem::size_of::<piet_gpu::Vertex>()) as _,
+                vertices.as_ptr() as *const _,
                 gl::DYNAMIC_DRAW,
             );
-            //gl::BindBuffer(bind_location, 0);
-
-            Ok(())
+            gl_error();
         }
     }
 
-    fn delete_buffer(&self, buffer: Self::Buffer) {
+    fn write_indices(&self, buffer: &Self::IndexBuffer, indices: &[u32]) {
         self.assert_context();
 
         unsafe {
-            gl::DeleteBuffers(1, &buffer);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, buffer.ebo);
+            gl::BufferData(
+                gl::ELEMENT_ARRAY_BUFFER,
+                (indices.len() * std::mem::size_of::<u32>()) as _,
+                indices.as_ptr() as *const _,
+                gl::DYNAMIC_DRAW,
+            );
+            gl_error();
         }
     }
 
-    fn create_vertex_array(
-        &self,
-        buffer: &Self::Buffer,
-        formats: &[piet_gpu::VertexFormat],
-    ) -> Result<Self::VertexArray, Self::Error> {
-        unsafe {
-            let mut vertex_array = 0;
-            gl::GenVertexArrays(1, &mut vertex_array);
-            gl::BindBuffer(gl::ARRAY_BUFFER, *buffer);
-
-            gl::BindVertexArray(vertex_array);
-
-            // Get the location of the attributes.
-            let position_location =
-                gl::GetAttribLocation(self.render_program, b"aPos\0".as_ptr() as *const _);
-            let tex_coord_location =
-                gl::GetAttribLocation(self.render_program, b"aTexCoord\0".as_ptr() as *const _);
-            let color_location =
-                gl::GetAttribLocation(self.render_program, b"color\0".as_ptr() as *const _);
-
-            for format in formats {
-                let location = match format.data_type {
-                    piet_gpu::DataType::Position => position_location,
-                    piet_gpu::DataType::Texture => tex_coord_location,
-                    piet_gpu::DataType::Color => color_location,
-                    _ => panic!("unsupported data type"),
-                };
-
-                let data_ty = match format.format {
-                    piet_gpu::DataFormat::Float => gl::FLOAT,
-                    piet_gpu::DataFormat::UnsignedByte => gl::UNSIGNED_BYTE,
-                    _ => panic!("unsupported data format"),
-                };
-
-                gl::VertexAttribPointer(
-                    location as _,
-                    format.num_components as _,
-                    data_ty,
-                    gl::FALSE,
-                    format.stride as _,
-                    format.offset as *const _,
-                );
-
-                gl::EnableVertexAttribArray(location as _);
-
-                println!(
-                    "Bound attribute {:?} to location {}",
-                    &format, location as usize
-                );
-            }
-
-            //gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindVertexArray(0);
-
-            Ok(vertex_array as _)
-        }
-    }
-
-    fn delete_vertex_array(&self, vertex_array: Self::VertexArray) {
+    fn delete_index_buffer(&self, buffer: Self::IndexBuffer) {
         self.assert_context();
 
         unsafe {
-            gl::DeleteVertexArrays(1, &vertex_array);
+            gl::DeleteBuffers(1, &buffer.ebo);
+        }
+    }
+
+    fn delete_vertex_buffer(&self, buffer: Self::VertexBuffer) {
+        self.assert_context();
+
+        unsafe {
+            gl::DeleteBuffers(1, &buffer.vbo);
         }
     }
 
     fn push_buffers(
         &self,
-        draw_buffers: piet_gpu::DrawBuffers<'_, Self>,
+        vertex_buffer: &Self::VertexBuffer,
+        index_buffer: &Self::IndexBuffer,
+        num_indices: usize,
         current_texture: &Self::Texture,
         mask_texture: &Self::Texture,
-        transform: &piet::kurbo::Affine,
+        transform: &Affine,
         size: (u32, u32),
     ) -> Result<(), Self::Error> {
         unsafe {
@@ -815,27 +846,27 @@ impl piet_gpu::GpuContext for GlContext {
             gl::Uniform1i(self.tex, 1);
 
             // Set the blend mode.
-            //gl::Enable(gl::BLEND);
-            //gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+            gl::Enable(gl::BLEND);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
 
             // Set vertex attributes.
-            gl::BindVertexArray(*draw_buffers.vertex_array);
+            gl::BindVertexArray(vertex_buffer.vao);
 
             // Set buffers.
-            gl::BindBuffer(gl::ARRAY_BUFFER, *draw_buffers.vertex_buffer);
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, *draw_buffers.index_buffer);
+            gl::BindBuffer(gl::ARRAY_BUFFER, vertex_buffer.vbo);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, index_buffer.ebo);
 
             // Draw.
             gl::DrawElements(
                 gl::TRIANGLES,
-                draw_buffers.num_indices as i32,
+                num_indices as i32,
                 gl::UNSIGNED_INT,
                 std::ptr::null(),
             );
 
             // Unbind everything.
             gl::BindVertexArray(0);
-            //gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
             gl::BindTexture(gl::TEXTURE_2D, 0);
             gl::UseProgram(0);
@@ -845,12 +876,32 @@ impl piet_gpu::GpuContext for GlContext {
     }
 }
 
+fn gl_error() {
+    let err = unsafe { gl::GetError() };
+
+    if err != gl::NO_ERROR {
+        let error_str = match err {
+            gl::INVALID_ENUM => "GL_INVALID_ENUM",
+            gl::INVALID_VALUE => "GL_INVALID_VALUE",
+            gl::INVALID_OPERATION => "GL_INVALID_OPERATION",
+            gl::STACK_OVERFLOW => "GL_STACK_OVERFLOW",
+            gl::STACK_UNDERFLOW => "GL_STACK_UNDERFLOW",
+            gl::OUT_OF_MEMORY => "GL_OUT_OF_MEMORY",
+            gl::INVALID_FRAMEBUFFER_OPERATION => "GL_INVALID_FRAMEBUFFER_OPERATION",
+            gl::CONTEXT_LOST => "GL_CONTEXT_LOST",
+            _ => "Unknown GL error",
+        };
+
+        log::error!("GL error: {}", error_str)
+    }
+}
+
 const VERTEX_SHADER: &str = "
 #version 330 core
 
 in vec2 aPos;
 in vec2 aTexCoord;
-in vec4 color;
+in vec4 aColor;
 
 out vec4 rgbaColor;
 out vec2 fTexCoord;
@@ -861,22 +912,19 @@ uniform vec2 viewportSize;
 
 void main() {
     // Transform the vertex position.
-    //vec3 pos = transform * vec3(aPos, 1.0);
-    //pos /= pos.z;
-    vec2 pos = aPos;
-    fMaskCoord = pos.xy + viewportSize;
+    vec3 pos = transform * vec3(aPos, 1.0);
+    pos /= pos.z;
+    fMaskCoord = pos.xy;
 
     // Clamp to the viewport size.
     gl_Position = vec4(
-        //(2.0 * pos.x / viewportSize.x) - 1.0,
-        //1.0 - (2.0 * pos.y / viewportSize.y),
-        aPos.x,
-        aPos.y,
+        (2.0 * pos.x / viewportSize.x) - 1.0,
+        1.0 - (2.0 * pos.y / viewportSize.y),
         0.0,
         1.0
     );
 
-    rgbaColor = color / 255.0;
+    rgbaColor = aColor / 255;
     fTexCoord = aTexCoord;
 }
 ";
