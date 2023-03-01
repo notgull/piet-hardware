@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 arrayvec = "0.7.2"
 bytemuck = { version = "1.13.0", default-features = false, features = ["derive"] }
+etagere = "0.2.7"
 lyon_tessellation = "1.0.10"
 piet = { version = "0.6.2", default-features = false }
 piet-cosmic-text = "0.1.1"
@@ -13,9 +14,11 @@ tiny-skia = { version = "0.8.3", default-features = false, features = ["std"] }
 tinyvec = { version = "1.6.0", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
+env_logger = { version = "0.10.0", default-features = false, features = ["auto-color"] }
 gl = "0.14.0"
 glutin = { version = "0.30.6", default-features = false, features = ["x11", "glx", "egl", "wgl"] }
 glutin-winit = { version = "0.3.0", default-features = false, features = ["x11", "egl", "glx", "wgl"] }
+log = "0.4.17"
 raw-window-handle = { version = "0.5.0", default-features = false }
 winit = { version = "0.28.1", default-features = false, features = ["x11"] }
 

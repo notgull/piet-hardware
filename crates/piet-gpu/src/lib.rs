@@ -44,6 +44,7 @@ pub use piet_cosmic_text;
 
 use arrayvec::ArrayVec;
 use bytemuck::offset_of;
+use etagere::AtlasAllocator;
 
 use lyon_tessellation::path::{Event, PathEvent};
 use lyon_tessellation::{
@@ -178,16 +179,21 @@ pub struct DrawBuffers<'a, C: GpuContext + ?Sized> {
 
 /// The image format to use for a texture.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum ImageFormat {
     /// Use RGBA pixels.
     Rgba,
 
     /// Use RGB pixels.
     Rgb,
+
+    /// Use grayscale pixel.
+    Grayscale,
 }
 
 /// The type of interpolation to use when sampling a texture.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum Interpolation {
     /// Use nearest-neighbor interpolation.
     Nearest,
@@ -198,6 +204,7 @@ pub enum Interpolation {
 
 /// The strategy to use for repeating.
 #[derive(Debug, Copy, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum RepeatStrategy {
     /// Repeat the image.
     Repeat,
@@ -208,6 +215,7 @@ pub enum RepeatStrategy {
 
 /// The format to be provided to the vertex array.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub struct VertexFormat {
     /// The data type associated with the position.
     pub data_type: DataType,
@@ -227,6 +235,7 @@ pub struct VertexFormat {
 
 /// The data format associated with a vertex array.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum DataFormat {
     /// Uses floats.
     Float,
@@ -237,6 +246,7 @@ pub enum DataFormat {
 
 /// The type of the data component.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum DataType {
     /// This represents the location of the component, in screen space.
     Position,
@@ -334,7 +344,7 @@ impl<C: GpuContext + ?Sized> Source<C> {
                 )
                 .piet_err()?;
 
-                texture.write_texture((1, 1), ImageFormat::Rgba, Some(&[255, 255, 255, 255]));
+                texture.write_texture((500, 500), ImageFormat::Rgba, Some(&[255, 255, 255, 255]));
 
                 texture
             },
@@ -343,13 +353,30 @@ impl<C: GpuContext + ?Sized> Source<C> {
                 let ebo = Buffer::new(&context).piet_err()?;
 
                 // Keep in sync with the buffer struct.
-                let layout = &[VertexFormat {
-                    data_type: DataType::Position,
-                    format: DataFormat::Float,
-                    num_components: 2,
-                    offset: offset_of!(Vertex, pos) as u32,
-                    stride: mem::size_of::<Vertex>() as u32,
-                }];
+                let stride = mem::size_of::<Vertex>() as u32;
+                let layout = &[
+                    VertexFormat {
+                        data_type: DataType::Position,
+                        format: DataFormat::Float,
+                        num_components: 2,
+                        offset: offset_of!(Vertex, pos) as u32,
+                        stride: mem::size_of::<Vertex>() as u32,
+                    },
+                    VertexFormat {
+                        data_type: DataType::Texture,
+                        format: DataFormat::Float,
+                        num_components: 2,
+                        offset: offset_of!(Vertex, uv) as u32,
+                        stride: mem::size_of::<Vertex>() as u32,
+                    },
+                    VertexFormat {
+                        data_type: DataType::Color,
+                        format: DataFormat::UnsignedByte,
+                        num_components: 4,
+                        offset: offset_of!(Vertex, color) as u32,
+                        stride: mem::size_of::<Vertex>() as u32,
+                    },
+                ];
 
                 let vao = VertexArray::new(&context, &vbo, layout).piet_err()?;
 
@@ -638,12 +665,33 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
 
     /// Push the values currently in the renderer to the GPU.
     fn push_buffers(&mut self, texture: Option<&Texture<C>>) -> Result<(), Pierror> {
+        let _tmp_vertices = [
+            Vertex {
+                pos: [-0.5, -0.5],
+                uv: [0.0, 0.0],
+                color: [255, 0, 0, 255],
+            },
+            Vertex {
+                pos: [0.5, -0.5],
+                uv: [0.0, 0.0],
+                color: [0, 255, 0, 255],
+            },
+            Vertex {
+                pos: [0.0, 0.5],
+                uv: [0.0, 0.0],
+                color: [0, 0, 255, 255],
+            },
+        ];
+
+        let _tmp_indices = [0, 1, 2];
+
         // Upload the vertex and index buffers.
         self.source
             .buffers
             .vbo
             .upload(
-                &self.source.buffers.vertex_buffers.vertices,
+                //&self.source.buffers.vertex_buffers.vertices,
+                &_tmp_vertices,
                 BufferType::Vertex,
             )
             .piet_err()?;
@@ -652,7 +700,8 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
             .buffers
             .ebo
             .upload(
-                &self.source.buffers.vertex_buffers.indices,
+                //&self.source.buffers.vertex_buffers.indices,
+                &_tmp_indices,
                 BufferType::Index,
             )
             .piet_err()?;
@@ -677,7 +726,8 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
             vertex_array: self.source.buffers.vao.resource(),
             vertex_buffer: self.source.buffers.vbo.resource(),
             index_buffer: self.source.buffers.ebo.resource(),
-            num_indices: self.source.buffers.vertex_buffers.indices.len(),
+            num_indices: //self.source.buffers.vertex_buffers.indices.len(),
+            _tmp_indices.len()
         };
 
         // Clear the original buffers.
