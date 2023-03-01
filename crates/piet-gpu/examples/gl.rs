@@ -146,7 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let transform = translation * rotation;
             transform * &star
         };
-        let solid_red = solid_red.get_or_insert_with(|| ctx.solid_brush(piet::Color::WHITE));
+        let solid_red = solid_red.get_or_insert_with(|| ctx.solid_brush(piet::Color::rgb8(0xe5, 0x39, 0xcd)));
         let outline = outline.get_or_insert_with(|| ctx.solid_brush(piet::Color::BLACK));
 
         ctx.fill(&rotated_star, solid_red);
@@ -298,15 +298,12 @@ struct GlContext {
     mask: gl::types::GLint,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 struct GlVertexBuffer {
     vbo: gl::types::GLuint,
-    vao: gl::types::GLuint,
-}
-
-#[derive(Copy, Clone)]
-struct GlIndexBuffer {
     ebo: gl::types::GLuint,
+    vao: gl::types::GLuint,
+    num_indices: Cell<usize>,
 }
 
 impl GlContext {
@@ -504,7 +501,6 @@ impl std::error::Error for GlError {}
 impl piet_gpu::GpuContext for GlContext {
     type Error = GlError;
     type Texture = gl::types::GLuint;
-    type IndexBuffer = GlIndexBuffer;
     type VertexBuffer = GlVertexBuffer;
 
     fn clear(&self, color: piet::Color) {
@@ -673,7 +669,7 @@ impl piet_gpu::GpuContext for GlContext {
                 gl::TEXTURE_MIN_FILTER,
                 mode as gl::types::GLint,
             );
-            gl::BindTexture(gl::TEXTURE_2D, 0);
+            //gl::BindTexture(gl::TEXTURE_2D, 0);
         }
     }
 
@@ -691,14 +687,17 @@ impl piet_gpu::GpuContext for GlContext {
         self.assert_context();
 
         unsafe {
-            let mut buffer = 0;
-            gl::GenBuffers(1, &mut buffer);
+            let mut buffers = [0; 2];
+            gl::GenBuffers(2, buffers.as_mut_ptr());
+            let [vbo, ebo] = buffers;
 
             // Set up the vertex array object.
             let mut vao = 0;
             gl::GenVertexArrays(1, &mut vao);
             gl::BindVertexArray(vao);
-            gl::BindBuffer(gl::ARRAY_BUFFER, buffer);
+            gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
+            gl::UseProgram(self.render_program);
 
             let stride = std::mem::size_of::<piet_gpu::Vertex>() as _;
 
@@ -743,46 +742,30 @@ impl piet_gpu::GpuContext for GlContext {
             );
 
             // Unbind the vertex array object.
-            gl::BindVertexArray(0);
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+            //gl::BindVertexArray(0);
+            //gl::BindBuffer(gl::ARRAY_BUFFER, 0);
 
             Ok(GlVertexBuffer {
                 vao,
-                vbo: buffer as _,
+                vbo,
+                ebo,
+                num_indices: Cell::new(0)
             })
         }
     }
 
-    fn create_index_buffer(&self) -> Result<Self::IndexBuffer, Self::Error> {
+    fn write_vertices(&self, buffer: &Self::VertexBuffer, vertices: &[piet_gpu::Vertex], indices: &[u32]) {
         self.assert_context();
 
         unsafe {
-            let mut buffer = 0;
-            gl::GenBuffers(1, &mut buffer);
-            Ok(GlIndexBuffer { ebo: buffer as _ })
-        }
-    }
-
-    fn write_vertices(&self, buffer: &Self::VertexBuffer, vertices: &[piet_gpu::Vertex]) {
-        self.assert_context();
-
-        unsafe {
-            gl::BindBuffer(gl::ARRAY_BUFFER, buffer.vbo);
+            //gl::BindBuffer(gl::ARRAY_BUFFER, buffer.vbo);
+            //gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, buffer.ebo);
             gl::BufferData(
                 gl::ARRAY_BUFFER,
                 (vertices.len() * std::mem::size_of::<piet_gpu::Vertex>()) as _,
                 vertices.as_ptr() as *const _,
                 gl::DYNAMIC_DRAW,
             );
-            gl_error();
-        }
-    }
-
-    fn write_indices(&self, buffer: &Self::IndexBuffer, indices: &[u32]) {
-        self.assert_context();
-
-        unsafe {
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, buffer.ebo);
             gl::BufferData(
                 gl::ELEMENT_ARRAY_BUFFER,
                 (indices.len() * std::mem::size_of::<u32>()) as _,
@@ -790,14 +773,7 @@ impl piet_gpu::GpuContext for GlContext {
                 gl::DYNAMIC_DRAW,
             );
             gl_error();
-        }
-    }
-
-    fn delete_index_buffer(&self, buffer: Self::IndexBuffer) {
-        self.assert_context();
-
-        unsafe {
-            gl::DeleteBuffers(1, &buffer.ebo);
+            buffer.num_indices.set(indices.len() as _);
         }
     }
 
@@ -805,15 +781,14 @@ impl piet_gpu::GpuContext for GlContext {
         self.assert_context();
 
         unsafe {
-            gl::DeleteBuffers(1, &buffer.vbo);
+            let buffers = [buffer.vbo, buffer.ebo];
+            gl::DeleteBuffers(2, buffers.as_ptr());
         }
     }
 
     fn push_buffers(
         &self,
         vertex_buffer: &Self::VertexBuffer,
-        index_buffer: &Self::IndexBuffer,
-        num_indices: usize,
         current_texture: &Self::Texture,
         mask_texture: &Self::Texture,
         transform: &Affine,
@@ -854,22 +829,22 @@ impl piet_gpu::GpuContext for GlContext {
 
             // Set buffers.
             gl::BindBuffer(gl::ARRAY_BUFFER, vertex_buffer.vbo);
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, index_buffer.ebo);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, vertex_buffer.ebo);
 
             // Draw.
             gl::DrawElements(
                 gl::TRIANGLES,
-                num_indices as i32,
+                vertex_buffer.num_indices.get() as i32,
                 gl::UNSIGNED_INT,
                 std::ptr::null(),
             );
 
             // Unbind everything.
-            gl::BindVertexArray(0);
-            gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
-            gl::BindTexture(gl::TEXTURE_2D, 0);
-            gl::UseProgram(0);
+            //gl::BindVertexArray(0);
+            //gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+            //gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
+            //gl::BindTexture(gl::TEXTURE_2D, 0);
+            //gl::UseProgram(0);
         }
 
         Ok(())
@@ -924,7 +899,7 @@ void main() {
         1.0
     );
 
-    rgbaColor = aColor / 255;
+    rgbaColor = aColor / 255.0;
     fTexCoord = aTexCoord;
 }
 ";
@@ -941,7 +916,7 @@ uniform sampler2D mask;
 
 void main() {
     vec4 textureColor = texture2D(tex, fTexCoord);
-    vec4 mainColor = rgbaColor * textureColor;
+    vec4 mainColor = (rgbaColor * 0.99) + (textureColor * 0.01);
 
     float maskAlpha = texture2D(mask, fMaskCoord).a;
     maskAlpha += 1.0;
