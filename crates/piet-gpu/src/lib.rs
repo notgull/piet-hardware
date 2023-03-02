@@ -22,7 +22,7 @@
 //! implementations of the [`piet`] drawing framework for hardware-accelerated backends
 //! like OpenGL, Vulkan and WGPU. It handles things like rasterization, atlas packing and
 //! memory management, while leaving the actual implementation of the GPU commands to the
-//! backend. As a bonus, this means that this crate contains no unsafe code.
+//! backend.
 //!
 //! To use, first implement the [`GpuContext`] trait on a type of your choice that represents
 //! an active GPU context. Wrap this type in the [`Source`] type, and then use that to
@@ -38,13 +38,14 @@
 //! This crate works first and foremost by converting drawing operations to a series of
 //! triangles.
 
-#![forbid(unsafe_code)]
-
 pub use piet;
 pub use piet_cosmic_text;
 
+use ahash::RandomState;
 use arrayvec::ArrayVec;
-use etagere::AtlasAllocator;
+use cosmic_text::{CacheKey, Color as CosmicColor, LayoutGlyph};
+use etagere::{Allocation, AtlasAllocator};
+use hashbrown::hash_map::{Entry, HashMap};
 
 use lyon_tessellation::path::{Event, PathEvent};
 use lyon_tessellation::{
@@ -130,7 +131,16 @@ pub trait GpuContext {
     fn delete_vertex_buffer(&self, buffer: Self::VertexBuffer);
 
     /// Write vertices to a vertex buffer.
-    fn write_vertices(&self, buffer: &Self::VertexBuffer, vertices: &[Vertex], indices: &[u32]);
+    ///
+    /// # Safety
+    ///
+    /// The indices must be valid for the given vertices.
+    unsafe fn write_vertices(
+        &self,
+        buffer: &Self::VertexBuffer,
+        vertices: &[Vertex],
+        indices: &[u32],
+    );
 
     /// Push buffer data to the GPU.
     fn push_buffers(
@@ -242,6 +252,9 @@ pub struct Source<C: GpuContext + ?Sized> {
 
     /// A cached path buffer.
     path_builder: PathBuilder,
+
+    /// The font atlas.
+    atlas: Option<Atlas<C>>,
 }
 
 impl<C: GpuContext + fmt::Debug + ?Sized> fmt::Debug for Source<C> {
@@ -268,10 +281,118 @@ struct Buffers<C: GpuContext + ?Sized> {
 
 struct Atlas<C: GpuContext + ?Sized> {
     /// The texture atlas.
-    texture: Texture<C>,
+    texture: Rc<Texture<C>>,
+
+    /// The size of the texture atlas.
+    size: (u32, u32),
 
     /// The allocator for the texture atlas.
     allocator: AtlasAllocator,
+
+    /// The hash map between the glyphs used and the texture allocation.
+    glyphs: HashMap<CacheKey, Allocation, RandomState>,
+}
+
+impl<C: GpuContext + ?Sized> Atlas<C> {
+    /// Get the texture ID for the atlas.
+    fn texture(&self) -> &Texture<C> {
+        &self.texture
+    }
+
+    /// Get the UV rectangle for the given glyph.
+    ///
+    /// This function rasterizes the glyph if it isn't already cached.
+    fn uv_rect(
+        &mut self,
+        glyph: &LayoutGlyph,
+        font_data: &cosmic_text::Font<'_>,
+    ) -> Result<Rect, Pierror> {
+        let alloc_to_rect = {
+            let (width, height) = self.size;
+            move |alloc: &Allocation| {
+                Rect::new(
+                    alloc.rectangle.min.x as f64 / width as f64,
+                    alloc.rectangle.min.y as f64 / height as f64,
+                    alloc.rectangle.max.x as f64 / width as f64,
+                    alloc.rectangle.max.y as f64 / height as f64,
+                )
+            }
+        };
+
+        let key = glyph.cache_key;
+
+        match self.glyphs.entry(key) {
+            Entry::Occupied(o) => {
+                let alloc = o.get();
+                Ok(alloc_to_rect(alloc))
+            }
+
+            Entry::Vacant(v) => {
+                use ab_glyph::Font as _;
+
+                // Rasterize the glyph.
+                let glyph_width = glyph.w as i32;
+                let glyph_height = glyph.cache_key.font_size;
+
+                let mut buffer = vec![0u32; (glyph_width * glyph_height) as usize];
+
+                // Q: Why are we using ab_glyph instead of swash, which cosmic-text uses?
+                // A: ab_glyph already exists in the winit dep tree, which this crate is intended for.
+                let font_ref = ab_glyph::FontRef::try_from_slice(font_data.data).piet_err()?;
+                let glyph_id = ab_glyph::GlyphId(glyph.cache_key.glyph_id)
+                    .with_scale(glyph.cache_key.font_size as f32);
+                let outline = font_ref
+                    .outline_glyph(glyph_id)
+                    .ok_or_else(|| Pierror::FontLoadingFailed)?;
+
+                // Draw the glyph.
+                outline.draw(|x, y, c| {
+                    let pixel = {
+                        let pixel_offset = (x + y * glyph_width as u32) as usize;
+
+                        match buffer.get_mut(pixel_offset) {
+                            Some(pixel) => pixel,
+                            None => return,
+                        }
+                    };
+
+                    // Convert the color to a u32.
+                    let color = {
+                        let cbyte = (255.0 * c) as u8;
+                        u32::from_ne_bytes([cbyte, cbyte, cbyte, cbyte])
+                    };
+
+                    // Set the pixel.
+                    *pixel = color;
+                });
+
+                // Find a place for it in the texture.
+                let alloc = self
+                    .allocator
+                    .allocate([glyph_width, glyph_height].into())
+                    .ok_or_else(|| {
+                        Pierror::BackendError("Failed to allocate glyph in texture atlas.".into())
+                    })?;
+
+                // Insert the glyph into the texture.
+                self.texture.write_subtexture(
+                    (alloc.rectangle.min.x as u32, alloc.rectangle.min.y as u32),
+                    (
+                        alloc.rectangle.width() as u32,
+                        alloc.rectangle.height() as u32,
+                    ),
+                    piet::ImageFormat::RgbaPremul,
+                    &buffer,
+                );
+
+                // Insert the allocation into the map.
+                let alloc = v.insert(alloc);
+
+                // Return the UV rectangle.
+                Ok(alloc_to_rect(alloc))
+            }
+        }
+    }
 }
 
 impl<C: GpuContext + ?Sized> Source<C> {
@@ -302,6 +423,22 @@ impl<C: GpuContext + ?Sized> Source<C> {
                     stroke_tesselator: StrokeTessellator::new(),
                     vbo,
                 }
+            },
+            atlas: {
+                let (max_width, max_height) = context.max_texture_size();
+                let texture = Texture::new(
+                    &context,
+                    InterpolationMode::NearestNeighbor,
+                    RepeatStrategy::Color(piet::Color::TRANSPARENT),
+                )
+                .piet_err()?;
+
+                Some(Atlas {
+                    texture: Rc::new(texture),
+                    size: (max_width, max_height),
+                    allocator: AtlasAllocator::new([max_width as i32, max_height as i32].into()),
+                    glyphs: HashMap::with_hasher(RandomState::new()),
+                })
             },
             context,
             text: Text::new(),
@@ -432,16 +569,16 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
     /// Fill in a rectangle.
     fn fill_rects(
         &mut self,
-        rects_and_uv_rects: &[(Rect, Rect)],
-        color: piet::Color,
+        rects_and_uv_rects: impl Iterator<Item = (Rect, Rect, piet::Color)>,
         texture: Option<&Texture<C>>,
     ) -> Result<(), Pierror> {
-        let (r, g, b, a) = color.as_rgba8();
-        let color = [r, g, b, a];
-
         // Get the vertices associated with the rectangles.
-        let vertices = |pos_rect: Rect, uv_rect: Rect| {
+        let mut rect_count = 0;
+        let mut vertices = |pos_rect: Rect, uv_rect: Rect, color: piet::Color| {
+            rect_count += 1;
             let cast = |x: f64| x as f32;
+            let (r, g, b, a) = color.as_rgba8();
+            let color = [r, g, b, a];
 
             [
                 Vertex {
@@ -469,19 +606,20 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
 
         self.source.buffers.vertex_buffers.vertices.extend(
             rects_and_uv_rects
-                .iter()
-                .copied()
-                .flat_map(|(pos_rect, uv_rect)| vertices(pos_rect, uv_rect)),
+                .flat_map(|(pos_rect, uv_rect, color)| vertices(pos_rect, uv_rect, color)),
         );
-        self.source.buffers.vertex_buffers.indices.extend(
-            (0..rects_and_uv_rects.len() as u32).flat_map(|i| {
-                let base = i * 6;
+        self.source
+            .buffers
+            .vertex_buffers
+            .indices
+            .extend((0..rect_count).flat_map(|i| {
+                let base = i * 4;
                 [base, base + 1, base + 2, base, base + 2, base + 3]
-            }),
-        );
+            }));
 
         // Push the buffers to the GPU.
-        self.push_buffers(texture)
+        // SAFETY: The indices are valid.
+        unsafe { self.push_buffers(texture) }
     }
 
     /// Fill in the provided shape.
@@ -517,7 +655,8 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
             .piet_err()?;
 
         // Push the incoming buffers.
-        self.push_buffers(brush.0.texture().as_ref().map(|t| &*t.texture))
+        // SAFETY: The indices are valid.
+        unsafe { self.push_buffers(brush.0.texture().as_ref().map(|t| &*t.texture)) }
     }
 
     fn stroke_impl(
@@ -574,11 +713,12 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
             .piet_err()?;
 
         // Push the incoming buffers.
-        self.push_buffers(brush.0.texture().as_ref().map(|t| &*t.texture))
+        // SAFETY: Buffer indices do not exceed the size of the vertex buffer.
+        unsafe { self.push_buffers(brush.0.texture().as_ref().map(|t| &*t.texture)) }
     }
 
     /// Push the values currently in the renderer to the GPU.
-    fn push_buffers(&mut self, texture: Option<&Texture<C>>) -> Result<(), Pierror> {
+    unsafe fn push_buffers(&mut self, texture: Option<&Texture<C>>) -> Result<(), Pierror> {
         // Upload the vertex and index buffers.
         self.source.buffers.vbo.upload(
             &self.source.buffers.vertex_buffers.vertices,
@@ -679,14 +819,16 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         let result = self.fill_rects(
             {
                 let uv_white = Point::new(UV_WHITE[0] as f64, UV_WHITE[1] as f64);
-                &[(
+                ([(
                     region.unwrap_or_else(|| {
                         Rect::from_origin_size((0.0, 0.0), (self.size.0 as f64, self.size.1 as f64))
                     }),
                     Rect::from_points(uv_white, uv_white),
-                )]
+                    color,
+                )])
+                .iter()
+                .copied()
             },
-            color,
             None,
         );
 
@@ -788,7 +930,77 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
     }
 
     fn draw_text(&mut self, layout: &Self::TextLayout, pos: impl Into<Point>) {
-        todo!()
+        struct RestoreAtlas<'a, 'b, G: GpuContext + ?Sized> {
+            context: &'a mut RenderContext<'b, G>,
+            atlas: Option<Atlas<G>>,
+        }
+
+        impl<G: GpuContext + ?Sized> Drop for RestoreAtlas<'_, '_, G> {
+            fn drop(&mut self) {
+                self.context.source.atlas = Some(self.atlas.take().unwrap());
+            }
+        }
+
+        let pos = pos.into();
+        let mut restore = RestoreAtlas {
+            atlas: self.source.atlas.take(),
+            context: self,
+        };
+
+        // Iterate over the glyphs and use them to write.
+        let texture = restore.atlas.as_ref().unwrap().texture.clone();
+        let result = restore.context.fill_rects(
+            layout
+                .buffer()
+                .layout_runs()
+                .flat_map(|run| {
+                    // Combine the run's glyphs and the layout's y position.
+                    run.glyphs
+                        .iter()
+                        .map(move |glyph| (glyph, run.line_y as f64))
+                })
+                .filter_map({
+                    let atlas = restore.atlas.as_mut().unwrap();
+                    |(glyph, line_y)| {
+                        // Get the rectangle in screen space representing the glyph.
+                        let pos_rect = Rect::from_origin_size(
+                            (
+                                glyph.x_int as f64 + pos.x,
+                                glyph.y_int as f64 + line_y + pos.y,
+                            ),
+                            (glyph.w as f64, glyph.cache_key.font_size as f64),
+                        );
+
+                        // Get the rectangle in texture space representing the glyph.
+                        let font_data = layout
+                            .buffer()
+                            .font_system()
+                            .get_font(glyph.cache_key.font_id)
+                            .expect("font not found");
+                        let uv_rect = match atlas.uv_rect(glyph, &font_data) {
+                            Ok(rect) => rect,
+                            Err(e) => {
+                                tracing::error!("failed to get uv rect: {}", e);
+                                return None;
+                            }
+                        };
+
+                        let color = match glyph.color_opt {
+                            Some(color) => {
+                                let [r, g, b, a] = [color.r(), color.g(), color.b(), color.a()];
+                                piet::Color::rgba8(r, g, b, a)
+                            }
+                            None => piet::Color::WHITE,
+                        };
+
+                        Some((pos_rect, uv_rect, color))
+                    }
+                }),
+            Some(&texture),
+        );
+
+        drop(restore);
+        leap!(self, result);
     }
 
     fn save(&mut self) -> Result<(), Pierror> {
@@ -875,8 +1087,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
 
         // Use this to draw the image.
         if let Err(e) = self.fill_rects(
-            &[(pos_rect, uv_rect)],
-            piet::Color::WHITE,
+            ([(pos_rect, uv_rect, piet::Color::WHITE)]).iter().copied(),
             Some(&image.texture),
         ) {
             self.status = Err(e);
@@ -1124,7 +1335,7 @@ impl<C: GpuContext + ?Sized> VertexBuffer<C> {
         Ok(Self::from_raw(context, resource))
     }
 
-    fn upload(&self, data: &[Vertex], indices: &[u32]) {
+    unsafe fn upload(&self, data: &[Vertex], indices: &[u32]) {
         self.context.write_vertices(self.resource(), data, indices)
     }
 }

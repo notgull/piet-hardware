@@ -1,0 +1,9 @@
+[package]
+name = "piet-glow"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytemuck = { version = "1.13.1", default-features = false }
+glow = { version = "0.12.1", default-features = false }
+piet-gpu = { version = "0.1.0", path = "../piet-gpu" }
