@@ -39,7 +39,6 @@
 //! triangles.
 
 pub use piet;
-pub use piet_cosmic_text;
 
 use ahash::RandomState;
 use arrayvec::ArrayVec;
@@ -66,7 +65,9 @@ use std::fmt;
 use std::mem;
 use std::rc::Rc;
 
-pub use piet_cosmic_text::{Text, TextLayout, TextLayoutBuilder};
+use piet_cosmic_text::{
+    Text as CosText, TextLayout as CosTextLayout, TextLayoutBuilder as CosTextLayoutBuilder,
+};
 
 const UV_WHITE: [f32; 2] = [0.5, 0.5];
 
@@ -441,7 +442,7 @@ impl<C: GpuContext + ?Sized> Source<C> {
                 })
             },
             context,
-            text: Text::new(),
+            text: Text(CosText::new()),
             path_builder: PathBuilder::new(),
         })
     }
@@ -468,6 +469,16 @@ impl<C: GpuContext + ?Sized> Source<C> {
             status: Ok(()),
             tolerance: 1.0,
         }
+    }
+
+    /// Get a reference to the text backend.
+    pub fn text(&self) -> &Text {
+        &self.text
+    }
+
+    /// Get a mutable reference to the text backend.
+    pub fn text_mut(&mut self) -> &mut Text {
+        &mut self.text
     }
 }
 
@@ -758,6 +769,16 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
 
         Ok(())
     }
+
+    /// Get the source of this render context.
+    pub fn source(&self) -> &Source<C> {
+        self.source
+    }
+
+    /// Get a mutable reference to the source of this render context.
+    pub fn source_mut(&mut self) -> &mut Source<C> {
+        self.source
+    }
 }
 
 macro_rules! leap {
@@ -951,6 +972,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         let texture = restore.atlas.as_ref().unwrap().texture.clone();
         let result = restore.context.fill_rects(
             layout
+                .0
                 .buffer()
                 .layout_runs()
                 .flat_map(|run| {
@@ -973,6 +995,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
 
                         // Get the rectangle in texture space representing the glyph.
                         let font_data = layout
+                            .0
                             .buffer()
                             .font_system()
                             .get_font(glyph.cache_key.font_id)
@@ -1188,6 +1211,100 @@ impl<C: GpuContext + ?Sized> Clone for BrushInner<C> {
                 image: RefCell::new(image.borrow().clone()),
             },
         }
+    }
+}
+
+/// The text layout engine for the GPU renderer.
+#[derive(Clone)]
+pub struct Text(CosText);
+
+impl piet::Text for Text {
+    type TextLayout = TextLayout;
+    type TextLayoutBuilder = TextLayoutBuilder;
+
+    fn font_family(&mut self, family_name: &str) -> Option<piet::FontFamily> {
+        self.0.font_family(family_name)
+    }
+
+    fn load_font(&mut self, data: &[u8]) -> Result<piet::FontFamily, Pierror> {
+        self.0.load_font(data)
+    }
+
+    fn new_text_layout(&mut self, text: impl piet::TextStorage) -> Self::TextLayoutBuilder {
+        TextLayoutBuilder(self.0.new_text_layout(text))
+    }
+}
+
+/// The text layout builder for the GPU renderer.
+pub struct TextLayoutBuilder(CosTextLayoutBuilder);
+
+impl piet::TextLayoutBuilder for TextLayoutBuilder {
+    type Out = TextLayout;
+
+    fn max_width(self, width: f64) -> Self {
+        Self(self.0.max_width(width))
+    }
+
+    fn alignment(self, alignment: piet::TextAlignment) -> Self {
+        Self(self.0.alignment(alignment))
+    }
+
+    fn default_attribute(self, attribute: impl Into<piet::TextAttribute>) -> Self {
+        Self(self.0.default_attribute(attribute))
+    }
+
+    fn range_attribute(
+        self,
+        range: impl std::ops::RangeBounds<usize>,
+        attribute: impl Into<piet::TextAttribute>,
+    ) -> Self {
+        Self(self.0.range_attribute(range, attribute))
+    }
+
+    fn build(self) -> Result<Self::Out, Pierror> {
+        todo!()
+    }
+}
+
+/// The text layout for the GPU renderer.
+#[derive(Clone)]
+pub struct TextLayout(CosTextLayout);
+
+impl piet::TextLayout for TextLayout {
+    fn size(&self) -> Size {
+        self.0.size()
+    }
+
+    fn trailing_whitespace_width(&self) -> f64 {
+        self.0.trailing_whitespace_width()
+    }
+
+    fn image_bounds(&self) -> Rect {
+        self.0.image_bounds()
+    }
+
+    fn text(&self) -> &str {
+        self.0.text()
+    }
+
+    fn line_text(&self, line_number: usize) -> Option<&str> {
+        self.0.line_text(line_number)
+    }
+
+    fn line_metric(&self, line_number: usize) -> Option<piet::LineMetric> {
+        self.0.line_metric(line_number)
+    }
+
+    fn line_count(&self) -> usize {
+        self.0.line_count()
+    }
+
+    fn hit_test_point(&self, point: Point) -> piet::HitTestPoint {
+        self.0.hit_test_point(point)
+    }
+
+    fn hit_test_text_position(&self, idx: usize) -> piet::HitTestPosition {
+        self.0.hit_test_text_position(idx)
     }
 }
 

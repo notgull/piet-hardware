@@ -22,10 +22,10 @@
 
 use glow::HasContext;
 
-use piet_gpu::piet::{self, kurbo};
-use piet_gpu::GpuContext;
+use piet::IntoBrush;
+use piet_gpu::piet::{self, kurbo, Error as Pierror};
 
-use std::fmt;
+use std::{borrow::Cow, fmt, mem::forget};
 
 macro_rules! c {
     ($e:expr) => {{
@@ -33,10 +33,24 @@ macro_rules! c {
     }};
 }
 
+const VERTEX_SHADER: &str = include_str!("../../../shaders/glow.v.glsl");
+const FRAGMENT_SHADER: &str = include_str!("../../../shaders/glow.f.glsl");
+
 /// A wrapper around a `glow` context.
-struct GlContext<H: HasContext + ?Sized> {
+struct GpuContext<H: HasContext + ?Sized> {
+    /// A compiled shader program for rendering.
+    render_program: H::Program,
+
     /// The underlying context.
     context: H,
+}
+
+impl<H: HasContext + ?Sized> Drop for GpuContext<H> {
+    fn drop(&mut self) {
+        unsafe {
+            self.context.delete_program(self.render_program);
+        }
+    }
 }
 
 /// A wrapper around a `glow` texture.
@@ -60,6 +74,12 @@ struct GlVertexBuffer<H: HasContext + ?Sized> {
 #[derive(Debug)]
 struct GlError(String);
 
+impl From<String> for GlError {
+    fn from(s: String) -> Self {
+        GlError(s)
+    }
+}
+
 impl fmt::Display for GlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "gl error: {}", self.0)
@@ -68,7 +88,7 @@ impl fmt::Display for GlError {
 
 impl std::error::Error for GlError {}
 
-impl<H: HasContext + ?Sized> GpuContext for GlContext<H> {
+impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
     type Texture = GlTexture<H>;
 
     type VertexBuffer = GlVertexBuffer<H>;
@@ -97,21 +117,106 @@ impl<H: HasContext + ?Sized> GpuContext for GlContext<H> {
         interpolation: piet_gpu::piet::InterpolationMode,
         repeat: piet_gpu::RepeatStrategy,
     ) -> Result<Self::Texture, Self::Error> {
-        todo!()
+        unsafe {
+            let texture = self.context.create_texture().gl_err()?;
+
+            // Bind the texture.
+            self.context.bind_texture(glow::TEXTURE_2D, Some(texture));
+            let _guard = CallOnDrop(|| {
+                self.context.bind_texture(glow::TEXTURE_2D, None);
+            });
+
+            let (min_filter, mag_filter) = match interpolation {
+                piet::InterpolationMode::NearestNeighbor => (glow::NEAREST, glow::NEAREST),
+                piet::InterpolationMode::Bilinear => (glow::LINEAR, glow::LINEAR),
+            };
+
+            self.context.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                min_filter as i32,
+            );
+            self.context.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                mag_filter as i32,
+            );
+
+            let (wrap_s, wrap_t) = match repeat {
+                piet_gpu::RepeatStrategy::Color(color) => {
+                    let (r, g, b, a) = color.as_rgba();
+                    self.context.tex_parameter_f32(
+                        glow::TEXTURE_2D,
+                        glow::TEXTURE_BORDER_COLOR,
+                        c!(r),
+                    );
+
+                    (glow::CLAMP_TO_BORDER, glow::CLAMP_TO_BORDER)
+                }
+                piet_gpu::RepeatStrategy::Repeat => (glow::REPEAT, glow::REPEAT),
+                _ => panic!("unsupported repeat strategy: {:?}", repeat),
+            };
+
+            self.context
+                .tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, wrap_s as i32);
+            self.context
+                .tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, wrap_t as i32);
+
+            Ok(GlTexture(texture))
+        }
     }
 
     fn delete_texture(&self, texture: Self::Texture) {
-        todo!()
+        unsafe {
+            self.context.delete_texture(texture.0);
+        }
     }
 
     fn write_texture<T: bytemuck::Pod>(
         &self,
         texture: &Self::Texture,
-        size: (u32, u32),
-        format: piet_gpu::piet::ImageFormat,
+        (width, height): (u32, u32),
+        format: piet::ImageFormat,
         data: Option<&[T]>,
     ) {
-        todo!()
+        let data_width = match format {
+            piet::ImageFormat::Grayscale => 1,
+            piet::ImageFormat::Rgb => 3,
+            piet::ImageFormat::RgbaSeparate | piet::ImageFormat::RgbaPremul => 4,
+            _ => panic!("unsupported image format: {:?}", format),
+        };
+
+        let total_len = (width * height * data_width) as usize;
+        if let Some(data) = data {
+            assert_eq!(data.len() * std::mem::size_of::<T>(), total_len);
+        }
+
+        unsafe {
+            self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
+            let _guard = CallOnDrop(|| {
+                self.context.bind_texture(glow::TEXTURE_2D, None);
+            });
+
+            let (internal_format, format, data_type) = match format {
+                piet::ImageFormat::Grayscale => (glow::R8, glow::RED, glow::UNSIGNED_BYTE),
+                piet::ImageFormat::Rgb => (glow::RGB8, glow::RGB, glow::UNSIGNED_BYTE),
+                piet::ImageFormat::RgbaPremul => (glow::RGBA8, glow::RGBA, glow::UNSIGNED_BYTE),
+                piet::ImageFormat::RgbaSeparate => (glow::RGBA8, glow::RGBA, glow::UNSIGNED_BYTE),
+                _ => panic!("unsupported image format: {:?}", format),
+            };
+
+            self.context.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                internal_format as i32,
+                width as i32,
+                height as i32,
+                0,
+                format,
+                data_type,
+                data.map(|d| bytemuck::cast_slice(d)),
+            );
+        }
     }
 
     fn write_subtexture<T: bytemuck::Pod>(
@@ -122,7 +227,42 @@ impl<H: HasContext + ?Sized> GpuContext for GlContext<H> {
         format: piet_gpu::piet::ImageFormat,
         data: &[T],
     ) {
-        todo!()
+        let data_width = match format {
+            piet::ImageFormat::Grayscale => 1,
+            piet::ImageFormat::Rgb => 3,
+            piet::ImageFormat::RgbaSeparate | piet::ImageFormat::RgbaPremul => 4,
+            _ => panic!("unsupported image format: {:?}", format),
+        };
+
+        let total_len = (size.0 * size.1 * data_width) as usize;
+        assert_eq!(data.len() * std::mem::size_of::<T>(), total_len);
+
+        unsafe {
+            self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
+            let _guard = CallOnDrop(|| {
+                self.context.bind_texture(glow::TEXTURE_2D, None);
+            });
+
+            let (format, data_type) = match format {
+                piet::ImageFormat::Grayscale => (glow::RED, glow::UNSIGNED_BYTE),
+                piet::ImageFormat::Rgb => (glow::RGB, glow::UNSIGNED_BYTE),
+                piet::ImageFormat::RgbaPremul => (glow::RGBA, glow::UNSIGNED_BYTE),
+                piet::ImageFormat::RgbaSeparate => (glow::RGBA, glow::UNSIGNED_BYTE),
+                _ => panic!("unsupported image format: {:?}", format),
+            };
+
+            self.context.tex_sub_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                offset.0 as i32,
+                offset.1 as i32,
+                size.0 as i32,
+                size.1 as i32,
+                format,
+                data_type,
+                glow::PixelUnpackData::Slice(bytemuck::cast_slice(data)),
+            );
+        }
     }
 
     fn set_texture_interpolation(
@@ -130,19 +270,108 @@ impl<H: HasContext + ?Sized> GpuContext for GlContext<H> {
         texture: &Self::Texture,
         interpolation: piet_gpu::piet::InterpolationMode,
     ) {
-        todo!()
+        unsafe {
+            self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
+            let _guard = CallOnDrop(|| {
+                self.context.bind_texture(glow::TEXTURE_2D, None);
+            });
+
+            let (min_filter, mag_filter) = match interpolation {
+                piet::InterpolationMode::NearestNeighbor => {
+                    (glow::NEAREST_MIPMAP_NEAREST, glow::NEAREST)
+                }
+                piet::InterpolationMode::Bilinear => (glow::LINEAR_MIPMAP_NEAREST, glow::LINEAR),
+            };
+
+            self.context.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                min_filter as i32,
+            );
+            self.context.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                mag_filter as i32,
+            );
+        }
     }
 
     fn max_texture_size(&self) -> (u32, u32) {
-        todo!()
+        unsafe {
+            let size = self.context.get_parameter_i32(glow::MAX_TEXTURE_SIZE);
+            (size as u32, size as u32)
+        }
     }
 
     fn create_vertex_buffer(&self) -> Result<Self::VertexBuffer, Self::Error> {
-        todo!()
+        use piet_gpu::Vertex;
+
+        unsafe {
+            let vbo = self.context.create_buffer().gl_err()?;
+            let ebo = self.context.create_buffer().gl_err()?;
+            let vao = self.context.create_vertex_array().gl_err()?;
+
+            // Bind the buffers.
+            self.context.bind_vertex_array(Some(vao));
+            let _guard = CallOnDrop(|| {
+                self.context.bind_vertex_array(None);
+            });
+            self.context.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+            self.context
+                .bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ebo));
+
+            // Set up vertex attributes.
+            let vertex_attributes = [
+                (
+                    "aPosition",
+                    2,
+                    glow::FLOAT,
+                    bytemuck::offset_of!(Vertex, pos),
+                ),
+                ("aUv", 2, glow::FLOAT, bytemuck::offset_of!(Vertex, uv)),
+                (
+                    "aColor",
+                    4,
+                    glow::UNSIGNED_BYTE,
+                    bytemuck::offset_of!(Vertex, color),
+                ),
+            ];
+
+            let stride = std::mem::size_of::<Vertex>() as i32;
+            for (name, size, data_type, offset) in &vertex_attributes {
+                let location = self
+                    .context
+                    .get_attrib_location(self.render_program, name)
+                    .ok_or_else(|| {
+                        GlError(format!("failed to get attribute location for {}", name))
+                    })?;
+
+                self.context.enable_vertex_attrib_array(location);
+                self.context.vertex_attrib_pointer_f32(
+                    location,
+                    *size,
+                    *data_type,
+                    false,
+                    stride,
+                    *offset as i32,
+                );
+            }
+
+            Ok(GlVertexBuffer {
+                vbo,
+                ebo,
+                vao,
+                num_indices: 0,
+            })
+        }
     }
 
     fn delete_vertex_buffer(&self, buffer: Self::VertexBuffer) {
-        todo!()
+        unsafe {
+            self.context.delete_buffer(buffer.vbo);
+            self.context.delete_buffer(buffer.ebo);
+            self.context.delete_vertex_array(buffer.vao);
+        }
     }
 
     unsafe fn write_vertices(
@@ -163,5 +392,414 @@ impl<H: HasContext + ?Sized> GpuContext for GlContext<H> {
         size: (u32, u32),
     ) -> Result<(), Self::Error> {
         todo!()
+    }
+}
+
+/// A wrapper around a [`glow`] context with cached information.
+pub struct GlContext<H: HasContext + ?Sized> {
+    source: piet_gpu::Source<GpuContext<H>>,
+    text: Text,
+}
+
+impl<H: HasContext + ?Sized> GlContext<H> {
+    /// Create a new [`GlContext`] from a [`glow`] context.
+    ///
+    /// # Safety
+    ///
+    /// The context must be current while calling new, and the context must be current
+    /// when this type is dropped.
+    pub unsafe fn new(context: H) -> Result<Self, Pierror>
+    where
+        H: Sized,
+    {
+        // Get the current version.
+        let version = context.version();
+
+        // Check that the version is supported.
+        let has_supported_version = if version.is_embedded {
+            version.major >= 3
+        } else {
+            version.major >= 4 || (version.major >= 3 && version.minor >= 3)
+        };
+        if !has_supported_version {
+            return Err(Pierror::BackendError(
+                "OpenGL version 3.3 (or 3.0 ES) or higher is required".into(),
+            ));
+        }
+
+        let shader_header = if version.is_embedded {
+            "#version 300 es"
+        } else {
+            "#version 330 core"
+        };
+
+        let format_shader = |shader| format!("{}\n{}", shader_header, shader);
+
+        // Create a program to use for text rendering.
+        let program = compile_program(
+            &context,
+            &format_shader(VERTEX_SHADER),
+            &format_shader(FRAGMENT_SHADER),
+        )
+        .map_err(|e| Pierror::BackendError(e.into()))?;
+
+        piet_gpu::Source::new(GpuContext {
+            context,
+            render_program: program,
+        })
+        .map(|source| GlContext {
+            text: Text(source.text().clone()),
+            source,
+        })
+    }
+
+    /// Get a reference to the underlying [`glow`] context.
+    pub fn context(&self) -> &H {
+        &self.source.context().context
+    }
+
+    /// Get a render context.
+    pub unsafe fn render_context(&mut self, width: u32, height: u32) -> RenderContext<'_, H> {
+        RenderContext {
+            context: self.source.render_context(width, height),
+            text: &mut self.text,
+        }
+    }
+}
+
+/// The whole point.
+pub struct RenderContext<'a, H: HasContext + ?Sized> {
+    context: piet_gpu::RenderContext<'a, GpuContext<H>>,
+    text: &'a mut Text,
+}
+
+impl<H: HasContext + ?Sized> piet::RenderContext for RenderContext<'_, H> {
+    type Brush = Brush<H>;
+
+    type Text = Text;
+
+    type TextLayout = TextLayout;
+
+    type Image = Image<H>;
+
+    fn status(&mut self) -> Result<(), Pierror> {
+        self.context.status()
+    }
+
+    fn solid_brush(&mut self, color: piet::Color) -> Self::Brush {
+        Brush(self.context.solid_brush(color))
+    }
+
+    fn gradient(
+        &mut self,
+        gradient: impl Into<piet::FixedGradient>,
+    ) -> Result<Self::Brush, Pierror> {
+        self.context.gradient(gradient).map(Brush)
+    }
+
+    fn clear(&mut self, region: impl Into<Option<kurbo::Rect>>, color: piet::Color) {
+        self.context.clear(region, color)
+    }
+
+    fn stroke(&mut self, shape: impl kurbo::Shape, brush: &impl IntoBrush<Self>, width: f64) {
+        let brush = brush.make_brush(self, || shape.bounding_box());
+        self.context.stroke(shape, &brush.as_ref().0, width)
+    }
+
+    fn stroke_styled(
+        &mut self,
+        shape: impl kurbo::Shape,
+        brush: &impl IntoBrush<Self>,
+        width: f64,
+        style: &piet::StrokeStyle,
+    ) {
+        let brush = brush.make_brush(self, || shape.bounding_box());
+        self.context
+            .stroke_styled(shape, &brush.as_ref().0, width, style)
+    }
+
+    fn fill(&mut self, shape: impl kurbo::Shape, brush: &impl IntoBrush<Self>) {
+        let brush = brush.make_brush(self, || shape.bounding_box());
+        self.context.fill(shape, &brush.as_ref().0)
+    }
+
+    fn fill_even_odd(&mut self, shape: impl kurbo::Shape, brush: &impl IntoBrush<Self>) {
+        let brush = brush.make_brush(self, || shape.bounding_box());
+        self.context.fill_even_odd(shape, &brush.as_ref().0)
+    }
+
+    fn clip(&mut self, shape: impl kurbo::Shape) {
+        self.context.clip(shape)
+    }
+
+    fn text(&mut self) -> &mut Self::Text {
+        self.text
+    }
+
+    fn draw_text(&mut self, layout: &Self::TextLayout, pos: impl Into<kurbo::Point>) {
+        self.context.draw_text(&layout.0, pos)
+    }
+
+    fn save(&mut self) -> Result<(), Pierror> {
+        self.context.save()
+    }
+
+    fn restore(&mut self) -> Result<(), Pierror> {
+        self.context.restore()
+    }
+
+    fn finish(&mut self) -> Result<(), Pierror> {
+        self.context.finish()
+    }
+
+    fn transform(&mut self, transform: kurbo::Affine) {
+        self.context.transform(transform)
+    }
+
+    fn make_image(
+        &mut self,
+        width: usize,
+        height: usize,
+        buf: &[u8],
+        format: piet::ImageFormat,
+    ) -> Result<Self::Image, Pierror> {
+        self.context
+            .make_image(width, height, buf, format)
+            .map(Image)
+    }
+
+    fn draw_image(
+        &mut self,
+        image: &Self::Image,
+        dst_rect: impl Into<kurbo::Rect>,
+        interp: piet::InterpolationMode,
+    ) {
+        self.context.draw_image(&image.0, dst_rect, interp)
+    }
+
+    fn draw_image_area(
+        &mut self,
+        image: &Self::Image,
+        src_rect: impl Into<kurbo::Rect>,
+        dst_rect: impl Into<kurbo::Rect>,
+        interp: piet::InterpolationMode,
+    ) {
+        self.context
+            .draw_image_area(&image.0, src_rect, dst_rect, interp)
+    }
+
+    fn capture_image_area(
+        &mut self,
+        src_rect: impl Into<kurbo::Rect>,
+    ) -> Result<Self::Image, Pierror> {
+        self.context.capture_image_area(src_rect).map(Image)
+    }
+
+    fn blurred_rect(&mut self, rect: kurbo::Rect, blur_radius: f64, brush: &impl IntoBrush<Self>) {
+        let brush = brush.make_brush(self, || rect);
+        self.context
+            .blurred_rect(rect, blur_radius, &brush.as_ref().0)
+    }
+
+    fn current_transform(&self) -> kurbo::Affine {
+        self.context.current_transform()
+    }
+}
+
+/// The brush type.
+pub struct Brush<H: HasContext + ?Sized>(piet_gpu::Brush<GpuContext<H>>);
+
+impl<H: HasContext + ?Sized> Clone for Brush<H> {
+    fn clone(&self) -> Self {
+        Brush(self.0.clone())
+    }
+}
+
+impl<H: HasContext + ?Sized> IntoBrush<RenderContext<'_, H>> for Brush<H> {
+    fn make_brush<'a>(
+        &'a self,
+        _piet: &mut RenderContext<'_, H>,
+        _bbox: impl FnOnce() -> kurbo::Rect,
+    ) -> Cow<'a, Brush<H>> {
+        Cow::Borrowed(self)
+    }
+}
+
+/// The image type.
+pub struct Image<H: HasContext + ?Sized>(piet_gpu::Image<GpuContext<H>>);
+
+impl<H: HasContext + ?Sized> Clone for Image<H> {
+    fn clone(&self) -> Self {
+        Image(self.0.clone())
+    }
+}
+
+impl<H: HasContext + ?Sized> piet::Image for Image<H> {
+    fn size(&self) -> kurbo::Size {
+        self.0.size()
+    }
+}
+
+/// The text layout type.
+#[derive(Clone)]
+pub struct TextLayout(piet_gpu::TextLayout);
+
+impl piet::TextLayout for TextLayout {
+    fn size(&self) -> kurbo::Size {
+        self.0.size()
+    }
+
+    fn line_text(&self, line_number: usize) -> Option<&str> {
+        self.0.line_text(line_number)
+    }
+
+    fn line_metric(&self, line_number: usize) -> Option<piet::LineMetric> {
+        self.0.line_metric(line_number)
+    }
+
+    fn line_count(&self) -> usize {
+        self.0.line_count()
+    }
+
+    fn hit_test_point(&self, point: kurbo::Point) -> piet::HitTestPoint {
+        self.0.hit_test_point(point)
+    }
+
+    fn trailing_whitespace_width(&self) -> f64 {
+        self.0.trailing_whitespace_width()
+    }
+
+    fn image_bounds(&self) -> kurbo::Rect {
+        self.0.image_bounds()
+    }
+
+    fn text(&self) -> &str {
+        self.0.text()
+    }
+
+    fn hit_test_text_position(&self, idx: usize) -> piet::HitTestPosition {
+        self.0.hit_test_text_position(idx)
+    }
+}
+
+/// The text layout builder type.
+pub struct TextLayoutBuilder(piet_gpu::TextLayoutBuilder);
+
+impl piet::TextLayoutBuilder for TextLayoutBuilder {
+    type Out = TextLayout;
+
+    fn max_width(self, width: f64) -> Self {
+        Self(self.0.max_width(width))
+    }
+
+    fn alignment(self, alignment: piet::TextAlignment) -> Self {
+        Self(self.0.alignment(alignment))
+    }
+
+    fn default_attribute(self, attribute: impl Into<piet::TextAttribute>) -> Self {
+        Self(self.0.default_attribute(attribute))
+    }
+
+    fn range_attribute(
+        self,
+        range: impl std::ops::RangeBounds<usize>,
+        attribute: impl Into<piet::TextAttribute>,
+    ) -> Self {
+        Self(self.0.range_attribute(range, attribute))
+    }
+
+    fn build(self) -> Result<Self::Out, Pierror> {
+        Ok(TextLayout(self.0.build()?))
+    }
+}
+
+/// The text engine type.
+#[derive(Clone)]
+pub struct Text(piet_gpu::Text);
+
+impl piet::Text for Text {
+    type TextLayoutBuilder = TextLayoutBuilder;
+    type TextLayout = TextLayout;
+
+    fn font_family(&mut self, family_name: &str) -> Option<piet::FontFamily> {
+        self.0.font_family(family_name)
+    }
+
+    fn load_font(&mut self, data: &[u8]) -> Result<piet::FontFamily, Pierror> {
+        self.0.load_font(data)
+    }
+
+    fn new_text_layout(&mut self, text: impl piet::TextStorage) -> Self::TextLayoutBuilder {
+        TextLayoutBuilder(self.0.new_text_layout(text))
+    }
+}
+
+fn compile_program<H: HasContext + ?Sized>(
+    context: &H,
+    vertex_shader: &str,
+    fragment_shader: &str,
+) -> Result<H::Program, GlError> {
+    unsafe {
+        let vertex_shader = compile_shader(context, glow::VERTEX_SHADER, vertex_shader)?;
+        let fragment_shader = compile_shader(context, glow::FRAGMENT_SHADER, fragment_shader)?;
+
+        let program = context.create_program().gl_err()?;
+        let _call_on_drop = CallOnDrop(|| context.delete_program(program));
+
+        context.attach_shader(program, vertex_shader);
+        context.attach_shader(program, fragment_shader);
+        let _unlink_shaders = CallOnDrop(|| {
+            context.detach_shader(program, vertex_shader);
+            context.detach_shader(program, fragment_shader);
+            context.delete_shader(vertex_shader);
+            context.delete_shader(fragment_shader);
+        });
+        context.link_program(program);
+
+        if !context.get_program_link_status(program) {
+            let log = context.get_program_info_log(program);
+            return Err(GlError(log));
+        }
+
+        forget(_call_on_drop);
+        Ok(program)
+    }
+}
+
+unsafe fn compile_shader<H: HasContext + ?Sized>(
+    context: &H,
+    shader_type: u32,
+    source: &str,
+) -> Result<H::Shader, GlError> {
+    let shader = context.create_shader(shader_type).gl_err()?;
+    let _call_on_drop = CallOnDrop(|| context.delete_shader(shader));
+
+    context.shader_source(shader, source);
+    context.compile_shader(shader);
+
+    if !context.get_shader_compile_status(shader) {
+        let log = context.get_shader_info_log(shader);
+        return Err(GlError(log));
+    }
+
+    forget(_call_on_drop);
+    Ok(shader)
+}
+
+trait ResultExt<T, E> {
+    fn gl_err(self) -> Result<T, GlError>;
+}
+
+impl<T, E: Into<GlError>> ResultExt<T, E> for Result<T, E> {
+    fn gl_err(self) -> Result<T, GlError> {
+        self.map_err(Into::into)
+    }
+}
+
+struct CallOnDrop<F: FnMut()>(F);
+
+impl<F: FnMut()> Drop for CallOnDrop<F> {
+    fn drop(&mut self) {
+        (self.0)();
     }
 }

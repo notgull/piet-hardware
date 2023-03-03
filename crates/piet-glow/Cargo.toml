@@ -6,4 +6,14 @@ edition = "2021"
 [dependencies]
 bytemuck = { version = "1.13.1", default-features = false }
 glow = { version = "0.12.1", default-features = false }
+piet = { version = "0.6.2", default-features = false }
 piet-gpu = { version = "0.1.0", path = "../piet-gpu" }
+
+[dev-dependencies]
+glutin = { version = "0.30.6", default-features = false, features = ["x11", "egl", "wgl", "glx"] }
+glutin-winit = { version = "0.3.0", default-features = false, features = ["x11", "glx", "egl", "wgl"] }
+image = { version = "0.24.5", default-features = false, features = ["png", "jpeg"] }
+raw-window-handle = "0.5.0"
+tracing = { version = "0.1.37", features = ["log"] }
+tracing-subscriber = "0.3.16"
+winit = { version = "0.28.2", default-features = false, features = ["x11"] }
