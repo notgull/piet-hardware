@@ -658,7 +658,7 @@ impl piet_gpu::GpuContext for GlContext {
         texture: &Self::Texture,
         size: (u32, u32),
         format: piet::ImageFormat,
-        data: Option<&[u8]>,
+        data: Option<&[u32]>,
     ) {
         self.assert_context();
 
@@ -695,7 +695,7 @@ impl piet_gpu::GpuContext for GlContext {
         offset: (u32, u32),
         size: (u32, u32),
         format: piet::ImageFormat,
-        data: &[u8],
+        data: &[u32],
     ) {
         self.assert_context();
 

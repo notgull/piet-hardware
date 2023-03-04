@@ -106,7 +106,7 @@ pub trait GpuContext {
         texture: &Self::Texture,
         size: (u32, u32),
         format: piet::ImageFormat,
-        data: Option<&[u8]>,
+        data: Option<&[u32]>,
     );
 
     /// Write a sub-image to a texture.
@@ -116,7 +116,7 @@ pub trait GpuContext {
         offset: (u32, u32),
         size: (u32, u32),
         format: piet::ImageFormat,
-        data: &[u8],
+        data: &[u32],
     );
 
     /// Set the interpolation mode for a texture.
@@ -401,7 +401,7 @@ impl<C: GpuContext + ?Sized> Source<C> {
     pub fn from_rc(context: Rc<C>) -> Result<Self, Pierror> {
         Ok(Self {
             white_pixel: {
-                const WHITE: [u8; 4] = [0xFF; 4];
+                const WHITE: u32 = 0xFFFFFFFF;
 
                 // Setup a white pixel texture.
                 let texture = Texture::new(
@@ -411,7 +411,11 @@ impl<C: GpuContext + ?Sized> Source<C> {
                 )
                 .piet_err()?;
 
-                texture.write_texture((1, 1), piet::ImageFormat::RgbaSeparate, Some(&WHITE));
+                texture.write_texture(
+                    (1, 1),
+                    piet::ImageFormat::RgbaSeparate,
+                    Some(std::slice::from_ref(&WHITE)),
+                );
 
                 texture
             },
@@ -566,7 +570,7 @@ impl<C: GpuContext + ?Sized> Mask<C> {
             self.texture.write_texture(
                 (self.pixmap.width(), self.pixmap.height()),
                 piet::ImageFormat::RgbaSeparate,
-                Some(data),
+                Some(todo!()),
             );
 
             self.dirty = false;
@@ -1066,7 +1070,20 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         )
         .piet_err()?;
 
-        tex.write_texture((width as u32, height as u32), format, Some(buf));
+        // Cast to a vec of u32's
+        // TODO: Make this better.
+        let buf = {
+            let mut new_buf = vec![0u32; (buf.len() / 4) + 1];
+            bytemuck::cast_slice_mut(&mut new_buf)[..buf.len()].copy_from_slice(buf);
+
+            new_buf
+        };
+
+        tex.write_texture(
+            (width as u32, height as u32),
+            format,
+            Some(&buf[..(width * height) as usize]),
+        );
 
         Ok(Image {
             texture: Rc::new(tex),
@@ -1414,17 +1431,16 @@ impl<C: GpuContext + ?Sized> Texture<C> {
 
         // Write the pixmap into the texture.
         let data = pixmap.take();
-        texture.write_texture((width, height), piet::ImageFormat::RgbaPremul, Some(&data));
+        texture.write_texture(
+            (width, height),
+            piet::ImageFormat::RgbaPremul,
+            Some(todo!()),
+        );
 
         Ok(texture)
     }
 
-    fn write_texture(
-        &self,
-        size: (u32, u32),
-        format: piet::ImageFormat,
-        data: Option<&[u8]>,
-    ) {
+    fn write_texture(&self, size: (u32, u32), format: piet::ImageFormat, data: Option<&[u32]>) {
         self.context
             .write_texture(self.resource(), size, format, data);
     }
@@ -1434,7 +1450,7 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         offset: (u32, u32),
         size: (u32, u32),
         format: piet::ImageFormat,
-        data: &[u8],
+        data: &[u32],
     ) {
         self.context
             .write_subtexture(self.resource(), offset, size, format, data);
