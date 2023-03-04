@@ -113,7 +113,7 @@ struct GlVertexBuffer<H: HasContext + ?Sized> {
     vao: H::VertexArray,
 
     /// The number of indices.
-    num_indices:  Cell<usize>,
+    num_indices: Cell<usize>,
 }
 
 #[derive(Debug)]
@@ -135,9 +135,7 @@ impl std::error::Error for GlError {}
 
 impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
     type Texture = GlTexture<H>;
-
     type VertexBuffer = GlVertexBuffer<H>;
-
     type Error = GlError;
 
     fn clear(&self, color: piet_gpu::piet::Color) {
@@ -168,7 +166,7 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
             // Bind the texture.
             self.context.bind_texture(glow::TEXTURE_2D, Some(texture));
             let _guard = CallOnDrop(|| {
-                self.context.bind_texture(glow::TEXTURE_2D, None);
+                //self.context.bind_texture(glow::TEXTURE_2D, None);
             });
 
             let (min_filter, mag_filter) = match interpolation {
@@ -207,22 +205,24 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
             self.context
                 .tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, wrap_t as i32);
 
+            gl_error(&self.context);
+
             Ok(GlTexture(texture))
         }
     }
 
     fn delete_texture(&self, texture: Self::Texture) {
         unsafe {
-            self.context.delete_texture(texture.0);
+            //self.context.delete_texture(texture.0);
         }
     }
 
-    fn write_texture<T: bytemuck::Pod>(
+    fn write_texture(
         &self,
         texture: &Self::Texture,
         (width, height): (u32, u32),
         format: piet::ImageFormat,
-        data: Option<&[T]>,
+        data: Option<&[u8]>,
     ) {
         let data_width = match format {
             piet::ImageFormat::Grayscale => 1,
@@ -233,10 +233,17 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
 
         let total_len = (width * height * data_width) as usize;
         if let Some(data) = data {
-            assert_eq!(data.len() * std::mem::size_of::<T>(), total_len);
+            assert_eq!(data.len(), total_len);
         }
 
         unsafe {
+            // DEBUG: Draw all white for now.
+            /*let v = vec![255u8; 1_024];
+            let data = Some(&*v);*/
+            if let Some(data) = data.and_then(|d| d.get(..16)) {
+                println!("{:?}", data);
+            }
+
             self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
             let _guard = CallOnDrop(|| {
                 //self.context.bind_texture(glow::TEXTURE_2D, None);
@@ -259,18 +266,28 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
                 0,
                 format,
                 data_type,
-                data.map(|d| bytemuck::cast_slice(d)),
+                data,
             );
+
+            // DEBUG: Set repeat to repeat.
+            {
+                self.context
+                    .tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
+                self.context
+                    .tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::REPEAT as i32);
+            }
         }
+
+        gl_error(&self.context);
     }
 
-    fn write_subtexture<T: bytemuck::Pod>(
+    fn write_subtexture(
         &self,
         texture: &Self::Texture,
-        offset: (u32, u32),
-        size: (u32, u32),
+        (x, y): (u32, u32),
+        (width, height): (u32, u32),
         format: piet_gpu::piet::ImageFormat,
-        data: &[T],
+        data: &[u8],
     ) {
         let data_width = match format {
             piet::ImageFormat::Grayscale => 1,
@@ -279,13 +296,13 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
             _ => panic!("unsupported image format: {:?}", format),
         };
 
-        let total_len = (size.0 * size.1 * data_width) as usize;
-        assert_eq!(data.len() * std::mem::size_of::<T>(), total_len);
+        let total_len = (width * height * data_width) as usize;
+        assert_eq!(data.len(), total_len);
 
         unsafe {
             self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
             let _guard = CallOnDrop(|| {
-                self.context.bind_texture(glow::TEXTURE_2D, None);
+                //self.context.bind_texture(glow::TEXTURE_2D, None);
             });
 
             let (format, data_type) = match format {
@@ -299,15 +316,17 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
             self.context.tex_sub_image_2d(
                 glow::TEXTURE_2D,
                 0,
-                offset.0 as i32,
-                offset.1 as i32,
-                size.0 as i32,
-                size.1 as i32,
+                x as i32,
+                y as i32,
+                width as i32,
+                height as i32,
                 format,
                 data_type,
                 glow::PixelUnpackData::Slice(bytemuck::cast_slice(data)),
             );
         }
+
+        gl_error(&self.context);
     }
 
     fn set_texture_interpolation(
@@ -318,7 +337,7 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
         unsafe {
             self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
             let _guard = CallOnDrop(|| {
-                self.context.bind_texture(glow::TEXTURE_2D, None);
+                //self.context.bind_texture(glow::TEXTURE_2D, None);
             });
 
             let (min_filter, mag_filter) = match interpolation {
@@ -359,11 +378,12 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
             // Bind the buffers.
             self.context.bind_vertex_array(Some(vao));
             let _guard = CallOnDrop(|| {
-                self.context.bind_vertex_array(None);
+                //self.context.bind_vertex_array(None);
             });
             self.context.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
             self.context
                 .bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ebo));
+            self.context.use_program(Some(self.render_program));
 
             // Set up vertex attributes.
             let vertex_attributes = [
@@ -383,24 +403,26 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
             ];
 
             let stride = std::mem::size_of::<Vertex>() as i32;
-            for (name, size, data_type, offset) in &vertex_attributes {
+            for (name, size, data_type, offset) in vertex_attributes {
                 let location = self
                     .context
                     .get_attrib_location(self.render_program, name)
                     .ok_or_else(|| {
-                        GlError(format!("failed to get attribute location for {}", name))
+                        GlError(format!("failed to get attribute location for {name}"))
                     })?;
 
                 self.context.enable_vertex_attrib_array(location);
                 self.context.vertex_attrib_pointer_f32(
                     location,
-                    *size,
-                    *data_type,
+                    size,
+                    data_type,
                     false,
                     stride,
-                    *offset as i32,
+                    offset as i32,
                 );
             }
+
+            gl_error(&self.context);
 
             Ok(GlVertexBuffer {
                 vbo,
@@ -425,17 +447,16 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
         vertices: &[piet_gpu::Vertex],
         indices: &[u32],
     ) {
-        debug_assert!(
-            indices.iter().all(|&i| i < vertices.len() as u32),
-        );
+        debug_assert!(indices.iter().all(|&i| i < vertices.len() as u32),);
 
         unsafe {
             self.context.bind_vertex_array(Some(buffer.vao));
             let _guard = CallOnDrop(|| {
-                self.context.bind_vertex_array(None);
+                //self.context.bind_vertex_array(None);
             });
 
-            self.context.bind_buffer(glow::ARRAY_BUFFER, Some(buffer.vbo));
+            self.context
+                .bind_buffer(glow::ARRAY_BUFFER, Some(buffer.vbo));
             self.context.buffer_data_u8_slice(
                 glow::ARRAY_BUFFER,
                 bytemuck::cast_slice(vertices),
@@ -449,6 +470,8 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
                 bytemuck::cast_slice(indices),
                 glow::DYNAMIC_DRAW,
             );
+
+            gl_error(&self.context);
 
             buffer.num_indices.set(indices.len());
         }
@@ -468,13 +491,24 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
 
             // Set viewport size.
             self.context.viewport(0, 0, size.0 as i32, size.1 as i32);
-            self.context
-                .uniform_2_f32(Some(self.uniform(ViewportSize)), size.0 as f32, size.1 as f32);
+            self.context.uniform_2_f32(
+                Some(self.uniform(ViewportSize)),
+                size.0 as f32,
+                size.1 as f32,
+            );
 
             // Set the transform.
             let [a, b, c, d, e, f] = transform.as_coeffs();
             let transform = [
-                c!(a), c!(b), c!(0.0), c!(c), c!(d), c!(0.0), c!(e), c!(f), c!(1.0), 
+                c!(a),
+                c!(b),
+                c!(0.0),
+                c!(c),
+                c!(d),
+                c!(0.0),
+                c!(e),
+                c!(f),
+                c!(1.0),
             ];
             self.context.uniform_matrix_3_f32_slice(
                 Some(self.uniform(Transform)),
@@ -484,25 +518,29 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
 
             // Set the image texture.
             self.context.active_texture(glow::TEXTURE1);
-            self.context.bind_texture(glow::TEXTURE_2D, Some(current_texture.0));
+            self.context
+                .bind_texture(glow::TEXTURE_2D, Some(current_texture.0));
             self.context
                 .uniform_1_i32(Some(self.uniform(ImageTexture)), 1);
 
             // Set the mask texture.
             self.context.active_texture(glow::TEXTURE0);
-            self.context.bind_texture(glow::TEXTURE_2D, Some(mask_texture.0));
+            self.context
+                .bind_texture(glow::TEXTURE_2D, Some(mask_texture.0));
             self.context
                 .uniform_1_i32(Some(self.uniform(MaskTexture)), 0);
 
             // Enable blending.
             self.context.enable(glow::BLEND);
-            self.context.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            self.context
+                .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
 
             // Set the vertex array.
             self.context.bind_vertex_array(Some(vertex_buffer.vao));
 
             // Set the buffers.
-            self.context.bind_buffer(glow::ARRAY_BUFFER, Some(vertex_buffer.vbo));
+            self.context
+                .bind_buffer(glow::ARRAY_BUFFER, Some(vertex_buffer.vbo));
             self.context
                 .bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(vertex_buffer.ebo));
 
@@ -516,6 +554,7 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
 
             // Unbind the VAO.
             self.context.bind_vertex_array(None);
+            gl_error(&self.context);
 
             Ok(())
         }
@@ -571,13 +610,19 @@ impl<H: HasContext + ?Sized> GlContext<H> {
         .map_err(|e| Pierror::BackendError(e.into()))?;
 
         // Get the uniform locations.
-        let uniforms = UNIFORMS.iter().map(|uniform| {
-            context
-                .get_uniform_location(program, uniform.as_name())
-                .ok_or_else(|| {
-                    Pierror::BackendError(format!("failed to get uniform location for {}", uniform.as_name()).into())
-                })
-        }).collect::<Result<Box<[_]>, _>>()?;
+        let uniforms = UNIFORMS
+            .iter()
+            .map(|uniform| {
+                context
+                    .get_uniform_location(program, uniform.as_name())
+                    .ok_or_else(|| {
+                        Pierror::BackendError(
+                            format!("failed to get uniform location for {}", uniform.as_name())
+                                .into(),
+                        )
+                    })
+            })
+            .collect::<Result<Box<[_]>, _>>()?;
 
         piet_gpu::Source::new(GpuContext {
             context,
@@ -921,6 +966,26 @@ unsafe fn compile_shader<H: HasContext + ?Sized>(
 
     mem::forget(_call_on_drop);
     Ok(shader)
+}
+
+fn gl_error(h: &(impl HasContext + ?Sized)) {
+    let err = unsafe { h.get_error() };
+
+    if err != glow::NO_ERROR {
+        let error_str = match err {
+            glow::INVALID_ENUM => "GL_INVALID_ENUM",
+            glow::INVALID_VALUE => "GL_INVALID_VALUE",
+            glow::INVALID_OPERATION => "GL_INVALID_OPERATION",
+            glow::STACK_OVERFLOW => "GL_STACK_OVERFLOW",
+            glow::STACK_UNDERFLOW => "GL_STACK_UNDERFLOW",
+            glow::OUT_OF_MEMORY => "GL_OUT_OF_MEMORY",
+            glow::INVALID_FRAMEBUFFER_OPERATION => "GL_INVALID_FRAMEBUFFER_OPERATION",
+            glow::CONTEXT_LOST => "GL_CONTEXT_LOST",
+            _ => "Unknown GL error",
+        };
+
+        tracing::error!("GL error: {}", error_str)
+    }
 }
 
 trait ResultExt<T, E> {

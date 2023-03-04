@@ -653,12 +653,12 @@ impl piet_gpu::GpuContext for GlContext {
         }
     }
 
-    fn write_texture<T: bytemuck::Pod>(
+    fn write_texture(
         &self,
         texture: &Self::Texture,
         size: (u32, u32),
         format: piet::ImageFormat,
-        data: Option<&[T]>,
+        data: Option<&[u8]>,
     ) {
         self.assert_context();
 
@@ -689,13 +689,13 @@ impl piet_gpu::GpuContext for GlContext {
         }
     }
 
-    fn write_subtexture<T: bytemuck::Pod>(
+    fn write_subtexture(
         &self,
         texture: &Self::Texture,
         offset: (u32, u32),
         size: (u32, u32),
         format: piet::ImageFormat,
-        data: &[T],
+        data: &[u8],
     ) {
         self.assert_context();
 

@@ -101,22 +101,22 @@ pub trait GpuContext {
     fn delete_texture(&self, texture: Self::Texture);
 
     /// Write an image to a texture.
-    fn write_texture<T: bytemuck::Pod>(
+    fn write_texture(
         &self,
         texture: &Self::Texture,
         size: (u32, u32),
         format: piet::ImageFormat,
-        data: Option<&[T]>,
+        data: Option<&[u8]>,
     );
 
     /// Write a sub-image to a texture.
-    fn write_subtexture<T: bytemuck::Pod>(
+    fn write_subtexture(
         &self,
         texture: &Self::Texture,
         offset: (u32, u32),
         size: (u32, u32),
         format: piet::ImageFormat,
-        data: &[T],
+        data: &[u8],
     );
 
     /// Set the interpolation mode for a texture.
@@ -383,7 +383,7 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                         alloc.rectangle.height() as u32,
                     ),
                     piet::ImageFormat::RgbaPremul,
-                    &buffer,
+                    bytemuck::cast_slice(&buffer),
                 );
 
                 // Insert the allocation into the map.
@@ -1419,22 +1419,22 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         Ok(texture)
     }
 
-    fn write_texture<T: bytemuck::Pod>(
+    fn write_texture(
         &self,
         size: (u32, u32),
         format: piet::ImageFormat,
-        data: Option<&[T]>,
+        data: Option<&[u8]>,
     ) {
         self.context
             .write_texture(self.resource(), size, format, data);
     }
 
-    fn write_subtexture<T: bytemuck::Pod>(
+    fn write_subtexture(
         &self,
         offset: (u32, u32),
         size: (u32, u32),
         format: piet::ImageFormat,
-        data: &[T],
+        data: &[u8],
     ) {
         self.context
             .write_subtexture(self.resource(), offset, size, format, data);

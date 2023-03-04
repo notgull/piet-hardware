@@ -54,13 +54,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         // Draw a solid red using the path.
-        let solid_red = solid_red
-            .get_or_insert_with(|| render_context.solid_brush(piet::Color::MAROON));
+        let solid_red =
+            solid_red.get_or_insert_with(|| render_context.solid_brush(piet::Color::OLIVE));
         render_context.fill(&red_star, solid_red);
 
         // Draw a black outline using the path.
-        let outline = outline
-            .get_or_insert_with(|| render_context.solid_brush(piet::Color::BLACK));
+        let outline = outline.get_or_insert_with(|| render_context.solid_brush(piet::Color::BLACK));
         render_context.stroke(&red_star, outline, 5.0);
 
         // Test the transform.

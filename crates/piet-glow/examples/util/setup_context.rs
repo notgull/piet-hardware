@@ -169,6 +169,7 @@ mod util {
                         unsafe {
                             use glow::HasContext;
 
+                            glow_context.enable(glow::DEBUG_OUTPUT);
                             glow_context.debug_message_callback(
                                 debug_message_callback 
                             );
