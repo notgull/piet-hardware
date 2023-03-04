@@ -250,6 +250,9 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
                 _ => panic!("unsupported image format: {:?}", format),
             };
 
+            // Set texture parameters.
+            self.context.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+
             self.context.tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
@@ -260,24 +263,7 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
                 format,
                 data_type,
                 data.map(bytemuck::cast_slice),
-            ); 
-
-            // Generate mipmaps.
-            self.context.generate_mipmap(glow::TEXTURE_2D);
-
-            // DEBUG: Set repeat to repeat.
-            {
-                self.context.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_WRAP_S,
-                    glow::REPEAT as i32,
-                );
-                self.context.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_WRAP_T,
-                    glow::REPEAT as i32,
-                );
-            }
+            );
         }
 
         gl_error(&self.context);
@@ -344,9 +330,9 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
 
             let (min_filter, mag_filter) = match interpolation {
                 piet::InterpolationMode::NearestNeighbor => {
-                    (glow::NEAREST_MIPMAP_NEAREST, glow::NEAREST)
+                    (glow::NEAREST, glow::NEAREST)
                 }
-                piet::InterpolationMode::Bilinear => (glow::LINEAR_MIPMAP_NEAREST, glow::LINEAR),
+                piet::InterpolationMode::Bilinear => (glow::LINEAR, glow::LINEAR),
             };
 
             self.context.tex_parameter_i32(
@@ -548,7 +534,6 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
                 glow::UNSIGNED_INT,
                 0,
             );
-
 
             gl_error(&self.context);
 

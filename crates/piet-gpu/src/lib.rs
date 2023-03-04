@@ -342,9 +342,11 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                 let font_ref = ab_glyph::FontRef::try_from_slice(font_data.data).piet_err()?;
                 let glyph_id = ab_glyph::GlyphId(glyph.cache_key.glyph_id)
                     .with_scale(glyph.cache_key.font_size as f32);
-                let outline = font_ref
-                    .outline_glyph(glyph_id)
-                    .ok_or_else(|| Pierror::FontLoadingFailed)?;
+                let outline = font_ref.outline_glyph(glyph_id).ok_or_else(|| {
+                    Pierror::BackendError({
+                        format!("Failed to outline glyph {}", glyph.cache_key.glyph_id).into()
+                    })
+                })?;
 
                 // Draw the glyph.
                 outline.draw(|x, y, c| {
@@ -1279,7 +1281,7 @@ impl piet::TextLayoutBuilder for TextLayoutBuilder {
     }
 
     fn build(self) -> Result<Self::Out, Pierror> {
-        todo!()
+        Ok(TextLayout(self.0.build()?))
     }
 }
 

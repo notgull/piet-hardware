@@ -20,9 +20,10 @@
 include!("util/setup_context.rs");
 
 use piet::kurbo::{Affine, BezPath, Point, Rect, Vec2};
-use piet::{GradientStop, RenderContext as _};
+use piet::{FontFamily, GradientStop, RenderContext as _, Text, TextLayout, TextLayoutBuilder};
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A path representing a star.
@@ -42,6 +43,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut image = None;
     let mut solid_red = None;
     let mut outline = None;
+
+    let mut last_second = Instant::now();
+    let mut num_frames = 0;
+    let mut current_fps = None;
 
     util::with_renderer(move |render_context, width, height| {
         // Clear the screen to a light blue.
@@ -148,6 +153,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             piet::InterpolationMode::Bilinear,
         );
         render_context.stroke(out_rect, outline, 3.0);
+
+        // Update the FPS counter, if necessary.
+        num_frames += 1;
+        let now = Instant::now();
+        if now - last_second >= Duration::from_secs(1) {
+            let fps_string = format!("FPS: {num_frames}");
+            let fps_text = render_context
+                .text()
+                .new_text_layout(fps_string)
+                .font(FontFamily::SERIF, 24.0)
+                .text_color(piet::Color::BLACK)
+                .build()
+                .unwrap();
+
+            current_fps = Some(fps_text);
+
+            last_second = now;
+            num_frames = 0;
+        }
+
+        // Draw the FPS counter.
+        if let Some(current_fps) = current_fps.as_ref() {
+            let size = current_fps.size();
+            let pt = (
+                width as f64 - size.width - 10.0,
+                height as f64 - size.height - 10.0,
+            );
+
+            if pt.0 > 0.0 || pt.1 > 0.0 {
+                render_context.draw_text(current_fps, pt);
+            }
+        }
 
         // Panic on any errors.
         render_context.finish().unwrap();
