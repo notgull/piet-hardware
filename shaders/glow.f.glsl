@@ -33,16 +33,11 @@ uniform sampler2D uImage;
 uniform sampler2D uMask;
 
 void main() {
-    // Sample the image and mask.
-    vec4 imageColor = texture(uImage, fTexCoord);
-    vec4 maskColor = texture(uMask, fMaskCoord);
+    vec4 textureColor = texture2D(uImage, fTexCoord);
+    vec4 mainColor = fRgbaColor * textureColor;
 
-    // Apply the mask.
-    vec4 finalColor = imageColor * maskColor;
+    vec4 maskColor = texture2D(uMask, fMaskCoord);
+    vec4 finalColor = mainColor * maskColor;
 
-    // Apply the color.
-    finalColor *= fRgbaColor;
-
-    // Output the final color.
     gl_FragColor = finalColor;
 }

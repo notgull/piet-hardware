@@ -42,12 +42,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut image = None;
     let mut solid_red = None;
     let mut outline = None;
-    let mut radial_gradient = None;
 
     util::with_renderer(move |render_context, width, height| {
         // Clear the screen to a light blue.
         render_context.clear(None, piet::Color::rgb8(0x87, 0xce, 0xeb));
-        return;
 
         let red_star = {
             let rot = (tick % 360) as f64 / 180.0 * std::f64::consts::PI;
@@ -57,15 +55,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Draw a solid red using the path.
         let solid_red = solid_red
-            .get_or_insert_with(|| render_context.solid_brush(piet::Color::rgb8(0xff, 0x00, 0x00)));
+            .get_or_insert_with(|| render_context.solid_brush(piet::Color::MAROON));
         render_context.fill(&red_star, solid_red);
 
         // Draw a black outline using the path.
         let outline = outline
-            .get_or_insert_with(|| render_context.solid_brush(piet::Color::rgb8(0x00, 0x00, 0x00)));
+            .get_or_insert_with(|| render_context.solid_brush(piet::Color::BLACK));
         render_context.stroke(&red_star, outline, 5.0);
 
         // Test the transform.
+        /*
         render_context
             .with_save(|render_context| {
                 let rot = ((tick * 2) % 360) as f64 / 180.0 * std::f64::consts::PI;
@@ -102,6 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(())
             })
             .unwrap();
+        */
 
         // Create an image and draw it.
         let image = image.get_or_insert_with(|| {

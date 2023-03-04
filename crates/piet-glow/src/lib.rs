@@ -25,7 +25,10 @@ use glow::HasContext;
 use piet::IntoBrush;
 use piet_gpu::piet::{self, kurbo, Error as Pierror};
 
-use std::{borrow::Cow, fmt, mem::forget};
+use std::borrow::Cow;
+use std::cell::Cell;
+use std::fmt;
+use std::mem;
 
 macro_rules! c {
     ($e:expr) => {{
@@ -36,13 +39,55 @@ macro_rules! c {
 const VERTEX_SHADER: &str = include_str!("../../../shaders/glow.v.glsl");
 const FRAGMENT_SHADER: &str = include_str!("../../../shaders/glow.f.glsl");
 
+#[derive(Debug, Clone, Copy)]
+enum Uniforms {
+    Transform = 0,
+    ViewportSize = 1,
+    ImageTexture = 2,
+    MaskTexture = 3,
+}
+
+impl Uniforms {
+    fn as_index(self) -> usize {
+        self as usize
+    }
+
+    fn as_name(self) -> &'static str {
+        match self {
+            Uniforms::Transform => "uTransform",
+            Uniforms::ViewportSize => "uViewportSize",
+            Uniforms::ImageTexture => "uImage",
+            Uniforms::MaskTexture => "uMask",
+        }
+    }
+}
+
+const UNIFORM_COUNT: usize = 4;
+const UNIFORMS: [Uniforms; UNIFORM_COUNT] = [
+    Uniforms::Transform,
+    Uniforms::ViewportSize,
+    Uniforms::ImageTexture,
+    Uniforms::MaskTexture,
+];
+
+use Uniforms::*;
+
 /// A wrapper around a `glow` context.
 struct GpuContext<H: HasContext + ?Sized> {
     /// A compiled shader program for rendering.
     render_program: H::Program,
 
+    /// The uniform locations.
+    uniforms: Box<[H::UniformLocation]>,
+
     /// The underlying context.
     context: H,
+}
+
+impl<H: HasContext + ?Sized> GpuContext<H> {
+    fn uniform(&self, uniform: Uniforms) -> &H::UniformLocation {
+        self.uniforms.get(uniform.as_index()).unwrap()
+    }
 }
 
 impl<H: HasContext + ?Sized> Drop for GpuContext<H> {
@@ -68,7 +113,7 @@ struct GlVertexBuffer<H: HasContext + ?Sized> {
     vao: H::VertexArray,
 
     /// The number of indices.
-    num_indices: usize,
+    num_indices:  Cell<usize>,
 }
 
 #[derive(Debug)]
@@ -145,10 +190,10 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
             let (wrap_s, wrap_t) = match repeat {
                 piet_gpu::RepeatStrategy::Color(color) => {
                     let (r, g, b, a) = color.as_rgba();
-                    self.context.tex_parameter_f32(
+                    self.context.tex_parameter_f32_slice(
                         glow::TEXTURE_2D,
                         glow::TEXTURE_BORDER_COLOR,
-                        c!(r),
+                        &[c!(r), c!(g), c!(b), c!(a)],
                     );
 
                     (glow::CLAMP_TO_BORDER, glow::CLAMP_TO_BORDER)
@@ -194,7 +239,7 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
         unsafe {
             self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
             let _guard = CallOnDrop(|| {
-                self.context.bind_texture(glow::TEXTURE_2D, None);
+                //self.context.bind_texture(glow::TEXTURE_2D, None);
             });
 
             let (internal_format, format, data_type) = match format {
@@ -361,7 +406,7 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
                 vbo,
                 ebo,
                 vao,
-                num_indices: 0,
+                num_indices: Cell::new(0),
             })
         }
     }
@@ -380,7 +425,33 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
         vertices: &[piet_gpu::Vertex],
         indices: &[u32],
     ) {
-        todo!()
+        debug_assert!(
+            indices.iter().all(|&i| i < vertices.len() as u32),
+        );
+
+        unsafe {
+            self.context.bind_vertex_array(Some(buffer.vao));
+            let _guard = CallOnDrop(|| {
+                self.context.bind_vertex_array(None);
+            });
+
+            self.context.bind_buffer(glow::ARRAY_BUFFER, Some(buffer.vbo));
+            self.context.buffer_data_u8_slice(
+                glow::ARRAY_BUFFER,
+                bytemuck::cast_slice(vertices),
+                glow::DYNAMIC_DRAW,
+            );
+
+            self.context
+                .bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(buffer.ebo));
+            self.context.buffer_data_u8_slice(
+                glow::ELEMENT_ARRAY_BUFFER,
+                bytemuck::cast_slice(indices),
+                glow::DYNAMIC_DRAW,
+            );
+
+            buffer.num_indices.set(indices.len());
+        }
     }
 
     fn push_buffers(
@@ -391,7 +462,63 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
         transform: &piet_gpu::piet::kurbo::Affine,
         size: (u32, u32),
     ) -> Result<(), Self::Error> {
-        todo!()
+        unsafe {
+            // Use our program.
+            self.context.use_program(Some(self.render_program));
+
+            // Set viewport size.
+            self.context.viewport(0, 0, size.0 as i32, size.1 as i32);
+            self.context
+                .uniform_2_f32(Some(self.uniform(ViewportSize)), size.0 as f32, size.1 as f32);
+
+            // Set the transform.
+            let [a, b, c, d, e, f] = transform.as_coeffs();
+            let transform = [
+                c!(a), c!(b), c!(0.0), c!(c), c!(d), c!(0.0), c!(e), c!(f), c!(1.0), 
+            ];
+            self.context.uniform_matrix_3_f32_slice(
+                Some(self.uniform(Transform)),
+                false,
+                &transform,
+            );
+
+            // Set the image texture.
+            self.context.active_texture(glow::TEXTURE1);
+            self.context.bind_texture(glow::TEXTURE_2D, Some(current_texture.0));
+            self.context
+                .uniform_1_i32(Some(self.uniform(ImageTexture)), 1);
+
+            // Set the mask texture.
+            self.context.active_texture(glow::TEXTURE0);
+            self.context.bind_texture(glow::TEXTURE_2D, Some(mask_texture.0));
+            self.context
+                .uniform_1_i32(Some(self.uniform(MaskTexture)), 0);
+
+            // Enable blending.
+            self.context.enable(glow::BLEND);
+            self.context.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+
+            // Set the vertex array.
+            self.context.bind_vertex_array(Some(vertex_buffer.vao));
+
+            // Set the buffers.
+            self.context.bind_buffer(glow::ARRAY_BUFFER, Some(vertex_buffer.vbo));
+            self.context
+                .bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(vertex_buffer.ebo));
+
+            // Draw the triangles.
+            self.context.draw_elements(
+                glow::TRIANGLES,
+                vertex_buffer.num_indices.get() as i32,
+                glow::UNSIGNED_INT,
+                0,
+            );
+
+            // Unbind the VAO.
+            self.context.bind_vertex_array(None);
+
+            Ok(())
+        }
     }
 }
 
@@ -443,8 +570,18 @@ impl<H: HasContext + ?Sized> GlContext<H> {
         )
         .map_err(|e| Pierror::BackendError(e.into()))?;
 
+        // Get the uniform locations.
+        let uniforms = UNIFORMS.iter().map(|uniform| {
+            context
+                .get_uniform_location(program, uniform.as_name())
+                .ok_or_else(|| {
+                    Pierror::BackendError(format!("failed to get uniform location for {}", uniform.as_name()).into())
+                })
+        }).collect::<Result<Box<[_]>, _>>()?;
+
         piet_gpu::Source::new(GpuContext {
             context,
+            uniforms,
             render_program: program,
         })
         .map(|source| GlContext {
@@ -761,7 +898,7 @@ fn compile_program<H: HasContext + ?Sized>(
             return Err(GlError(log));
         }
 
-        forget(_call_on_drop);
+        mem::forget(_call_on_drop);
         Ok(program)
     }
 }
@@ -782,7 +919,7 @@ unsafe fn compile_shader<H: HasContext + ?Sized>(
         return Err(GlError(log));
     }
 
-    forget(_call_on_drop);
+    mem::forget(_call_on_drop);
     Ok(shader)
 }
 
