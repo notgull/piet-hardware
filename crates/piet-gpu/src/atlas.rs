@@ -27,11 +27,12 @@ use cosmic_text::{CacheKey, LayoutGlyph};
 use etagere::{Allocation, AtlasAllocator};
 use hashbrown::hash_map::{Entry, HashMap};
 
-use piet::kurbo::Rect;
+use piet::kurbo::{Point, Rect};
 use piet::{Error as Pierror, InterpolationMode};
 
 use std::rc::Rc;
 
+/// The atlas, combining all of the glyphs into a single texture.
 pub(crate) struct Atlas<C: GpuContext + ?Sized> {
     /// The texture atlas.
     texture: Rc<Texture<C>>,
@@ -43,7 +44,16 @@ pub(crate) struct Atlas<C: GpuContext + ?Sized> {
     allocator: AtlasAllocator,
 
     /// The hash map between the glyphs used and the texture allocation.
-    glyphs: HashMap<CacheKey, Allocation, RandomState>,
+    glyphs: HashMap<CacheKey, Position, RandomState>,
+}
+
+/// The positioning of a glyph in the atlas.
+struct Position {
+    /// The allocation of the glyph in the atlas.
+    allocation: Allocation,
+
+    /// The offset at which to draw the glyph.
+    offset: Point,
 }
 
 impl<C: GpuContext + ?Sized> Atlas<C> {
@@ -80,15 +90,20 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
         &mut self,
         glyph: &LayoutGlyph,
         font_data: &cosmic_text::Font<'_>,
-    ) -> Result<Rect, Pierror> {
+    ) -> Result<(Rect, Point), Pierror> {
         let alloc_to_rect = {
             let (width, height) = self.size;
-            move |alloc: &Allocation| {
-                Rect::new(
-                    alloc.rectangle.min.x as f64 / width as f64,
-                    alloc.rectangle.min.y as f64 / height as f64,
-                    alloc.rectangle.max.x as f64 / width as f64,
-                    alloc.rectangle.max.y as f64 / height as f64,
+            move |posn: &Position| {
+                let alloc = &posn.allocation;
+
+                (
+                    Rect::new(
+                        alloc.rectangle.min.x as f64 / width as f64,
+                        alloc.rectangle.min.y as f64 / height as f64,
+                        alloc.rectangle.max.x as f64 / width as f64,
+                        alloc.rectangle.max.y as f64 / height as f64,
+                    ),
+                    posn.offset,
                 )
             }
         };
@@ -104,12 +119,6 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
             Entry::Vacant(v) => {
                 use ab_glyph::Font as _;
 
-                // Rasterize the glyph.
-                let glyph_width = glyph.w as i32;
-                let glyph_height = glyph.cache_key.font_size;
-
-                let mut buffer = vec![0u32; (glyph_width * glyph_height) as usize];
-
                 // Q: Why are we using ab_glyph instead of swash, which cosmic-text uses?
                 // A: ab_glyph already exists in the winit dep tree, which this crate is intended
                 //    to be used with.
@@ -121,18 +130,15 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                         format!("Failed to outline glyph {}", glyph.cache_key.glyph_id).into()
                     })
                 })?;
-                
+
                 let bounds = outline.px_bounds();
-                let x_offset = (bounds.min.x) as isize;
-                let y_offset = (glyph_height as f32 + bounds.min.y) as isize;
+                let (width, height) = (bounds.width() as i32, bounds.height() as i32);
+                let mut buffer = vec![0u32; (width * height) as usize];
 
                 // Draw the glyph.
                 outline.draw(|x, y, c| {
-                    let x = x as isize + x_offset;
-                    let y = y as isize + y_offset;
-
                     let pixel = {
-                        let pixel_offset = (x + y * glyph_width as isize) as usize;
+                        let pixel_offset = (x + y * width as u32) as usize;
 
                         match buffer.get_mut(pixel_offset) {
                             Some(pixel) => pixel,
@@ -153,24 +159,33 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                 // Find a place for it in the texture.
                 let alloc = self
                     .allocator
-                    .allocate([glyph_width, glyph_height].into())
+                    .allocate([width, height].into())
                     .ok_or_else(|| {
                         Pierror::BackendError("Failed to allocate glyph in texture atlas.".into())
                     })?;
+
+                println!("{:?}", (width, height));
+                println!("{:?}", alloc.rectangle.size());
 
                 // Insert the glyph into the texture.
                 self.texture.write_subtexture(
                     (alloc.rectangle.min.x as u32, alloc.rectangle.min.y as u32),
                     (
-                        alloc.rectangle.width() as u32,
-                        alloc.rectangle.height() as u32,
+                        width as u32,
+                        height as u32,
                     ),
                     piet::ImageFormat::RgbaPremul,
-                    bytemuck::cast_slice(&buffer),
+                    bytemuck::cast_slice::<_, u8>(&buffer),
                 );
 
                 // Insert the allocation into the map.
-                let alloc = v.insert(alloc);
+                let alloc = v.insert(Position {
+                    allocation: alloc,
+                    offset: Point::new(
+                        bounds.min.x.into(),
+                        (glyph.cache_key.font_size as f32 + bounds.min.y).into(),
+                    ),
+                });
 
                 // Return the UV rectangle.
                 Ok(alloc_to_rect(alloc))

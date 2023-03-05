@@ -499,28 +499,28 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
                 .filter_map({
                     let atlas = restore.atlas.as_mut().unwrap();
                     |(glyph, line_y)| {
-                        // Get the rectangle in screen space representing the glyph.
-                        let pos_rect = Rect::from_origin_size(
-                            (
-                                glyph.x_int as f64 + pos.x,
-                                glyph.y_int as f64 + line_y + pos.y,
-                            ),
-                            (glyph.w as f64, glyph.cache_key.font_size as f64),
-                        );
-
                         // Get the rectangle in texture space representing the glyph.
                         let font_data = layout
                             .buffer()
                             .font_system()
                             .get_font(glyph.cache_key.font_id)
                             .expect("font not found");
-                        let uv_rect = match atlas.uv_rect(glyph, &font_data) {
+                        let (uv_rect, offset) = match atlas.uv_rect(glyph, &font_data) {
                             Ok(rect) => rect,
                             Err(e) => {
                                 tracing::trace!("failed to get uv rect: {}", e);
                                 return None;
                             }
                         };
+
+                        // Get the rectangle in screen space representing the glyph.
+                        let pos_rect = Rect::from_origin_size(
+                            (
+                                glyph.x_int as f64 + pos.x + offset.x,
+                                glyph.y_int as f64 + line_y + pos.y + offset.y,
+                            ),
+                            (glyph.w as f64, glyph.cache_key.font_size as f64),
+                        );
 
                         let color = match glyph.color_opt {
                             Some(color) => {
