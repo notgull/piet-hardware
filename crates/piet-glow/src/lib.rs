@@ -197,7 +197,7 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
                     (glow::CLAMP_TO_BORDER, glow::CLAMP_TO_BORDER)
                 }
                 piet_gpu::RepeatStrategy::Repeat => (glow::REPEAT, glow::REPEAT),
-                _ => panic!("unsupported repeat strategy: {:?}", repeat),
+                _ => panic!("unsupported repeat strategy: {repeat:?}"),
             };
 
             self.context
@@ -222,18 +222,18 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
         texture: &Self::Texture,
         (width, height): (u32, u32),
         format: piet::ImageFormat,
-        data: Option<&[u32]>,
+        data: Option<&[u8]>,
     ) {
         let data_width = match format {
             piet::ImageFormat::Grayscale => 1,
             piet::ImageFormat::Rgb => 3,
             piet::ImageFormat::RgbaSeparate | piet::ImageFormat::RgbaPremul => 4,
-            _ => panic!("unsupported image format: {:?}", format),
+            _ => panic!("unsupported image format: {format:?}"),
         };
 
         let total_len = (width * height * data_width) as usize;
         if let Some(data) = data {
-            assert_eq!(data.len() * 4, total_len);
+            assert_eq!(data.len(), total_len);
         }
 
         unsafe {
@@ -247,7 +247,7 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
                 piet::ImageFormat::Rgb => (glow::RGB8, glow::RGB, glow::UNSIGNED_BYTE),
                 piet::ImageFormat::RgbaPremul => (glow::RGBA8, glow::RGBA, glow::UNSIGNED_BYTE),
                 piet::ImageFormat::RgbaSeparate => (glow::RGBA8, glow::RGBA, glow::UNSIGNED_BYTE),
-                _ => panic!("unsupported image format: {:?}", format),
+                _ => panic!("unsupported image format: {format:?}"),
             };
 
             // Set texture parameters.
@@ -262,7 +262,7 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
                 0,
                 format,
                 data_type,
-                data.map(bytemuck::cast_slice),
+                data,
             );
         }
 
@@ -275,17 +275,17 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
         (x, y): (u32, u32),
         (width, height): (u32, u32),
         format: piet_gpu::piet::ImageFormat,
-        data: &[u32],
+        data: &[u8],
     ) {
         let data_width = match format {
             piet::ImageFormat::Grayscale => 1,
             piet::ImageFormat::Rgb => 3,
             piet::ImageFormat::RgbaSeparate | piet::ImageFormat::RgbaPremul => 4,
-            _ => panic!("unsupported image format: {:?}", format),
+            _ => panic!("unsupported image format: {format:?}"),
         };
 
         let total_len = (width * height * data_width) as usize;
-        assert_eq!(data.len() * 4, total_len);
+        assert_eq!(data.len(), total_len);
 
         unsafe {
             self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
@@ -298,7 +298,7 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
                 piet::ImageFormat::Rgb => (glow::RGB, glow::UNSIGNED_BYTE),
                 piet::ImageFormat::RgbaPremul => (glow::RGBA, glow::UNSIGNED_BYTE),
                 piet::ImageFormat::RgbaSeparate => (glow::RGBA, glow::UNSIGNED_BYTE),
-                _ => panic!("unsupported image format: {:?}", format),
+                _ => panic!("unsupported image format: {format:?}"),
             };
 
             self.context.tex_sub_image_2d(
@@ -310,7 +310,7 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
                 height as i32,
                 format,
                 data_type,
-                glow::PixelUnpackData::Slice(bytemuck::cast_slice(data)),
+                glow::PixelUnpackData::Slice(data),
             );
         }
 
@@ -329,9 +329,7 @@ impl<H: HasContext + ?Sized> piet_gpu::GpuContext for GpuContext<H> {
             });
 
             let (min_filter, mag_filter) = match interpolation {
-                piet::InterpolationMode::NearestNeighbor => {
-                    (glow::NEAREST, glow::NEAREST)
-                }
+                piet::InterpolationMode::NearestNeighbor => (glow::NEAREST, glow::NEAREST),
                 piet::InterpolationMode::Bilinear => (glow::LINEAR, glow::LINEAR),
             };
 
@@ -580,7 +578,7 @@ impl<H: HasContext + ?Sized> GlContext<H> {
             "#version 330 core"
         };
 
-        let format_shader = |shader| format!("{}\n{}", shader_header, shader);
+        let format_shader = |shader| format!("{shader_header}\n{shader}");
 
         // Create a program to use for text rendering.
         let program = compile_program(
@@ -622,6 +620,11 @@ impl<H: HasContext + ?Sized> GlContext<H> {
     }
 
     /// Get a render context.
+    ///
+    /// # Safety
+    ///
+    /// The context must be current while calling this method, as well as any of the
+    /// [`piet::RenderContext`] methods.
     pub unsafe fn render_context(&mut self, width: u32, height: u32) -> RenderContext<'_, H> {
         RenderContext {
             context: self.source.render_context(width, height),

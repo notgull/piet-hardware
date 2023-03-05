@@ -232,7 +232,7 @@ mod util {
                         // SAFETY: Context is current
                         let size = current_size.unwrap_or_else(|| window.inner_size());
                         let mut context =
-                            unsafe { renderer.render_context(size.width as u32, size.height as u32) };
+                            unsafe { renderer.render_context(size.width, size.height) };
                         f(&mut context, size.width, size.height);
 
                         window.request_redraw();

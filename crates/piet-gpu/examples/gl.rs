@@ -31,8 +31,8 @@ use glutin::prelude::*;
 
 use glutin_winit::{DisplayBuilder, GlWindow};
 
-use piet::kurbo::{Affine, BezPath, Point, Rect, Vec2};
-use piet::{GradientStop, RenderContext as _};
+use piet::kurbo::{Affine, BezPath, Point, Rect};
+use piet::RenderContext as _;
 
 use raw_window_handle::HasRawWindowHandle;
 
@@ -42,7 +42,7 @@ use winit::event_loop::EventLoop;
 use winit::window::WindowBuilder;
 
 use std::cell::Cell;
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::fmt;
 use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
@@ -658,7 +658,7 @@ impl piet_gpu::GpuContext for GlContext {
         texture: &Self::Texture,
         size: (u32, u32),
         format: piet::ImageFormat,
-        data: Option<&[u32]>,
+        data: Option<&[u8]>,
     ) {
         self.assert_context();
 
@@ -695,7 +695,7 @@ impl piet_gpu::GpuContext for GlContext {
         offset: (u32, u32),
         size: (u32, u32),
         format: piet::ImageFormat,
-        data: &[u32],
+        data: &[u8],
     ) {
         self.assert_context();
 

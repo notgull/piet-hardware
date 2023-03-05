@@ -43,6 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut image = None;
     let mut solid_red = None;
     let mut outline = None;
+    let mut radial_gradient = None;
 
     let mut last_second = Instant::now();
     let mut num_frames = 0;
@@ -68,15 +69,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         render_context.stroke(&red_star, outline, 5.0);
 
         // Test the transform.
-        /*
         render_context
             .with_save(|render_context| {
                 let rot = ((tick * 2) % 360) as f64 / 180.0 * std::f64::consts::PI;
-                let trans =
-                    Affine::scale(0.75) * Affine::translate((750.0, 275.0)) * Affine::rotate(rot);
+                let trans = Affine::translate((600.0, 200.0))
+                    * Affine::rotate(rot)
+                    * Affine::scale_non_uniform(0.75, 0.75);
                 let gradient = radial_gradient.get_or_insert_with(|| {
                     let grad = piet::FixedRadialGradient {
-                        center: Point::new(300.0, 400.0),
+                        center: Point::new(0.0, 0.0),
                         origin_offset: Vec2::new(0.0, 0.0),
                         radius: 150.0,
                         stops: vec![
@@ -105,7 +106,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(())
             })
             .unwrap();
-        */
 
         // Create an image and draw it.
         let image = image.get_or_insert_with(|| {
@@ -158,12 +158,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         num_frames += 1;
         let now = Instant::now();
         if now - last_second >= Duration::from_secs(1) {
-            let fps_string = format!("FPS: {num_frames}");
+            let fps_string = format!("Frames per Second: {num_frames}");
             let fps_text = render_context
                 .text()
                 .new_text_layout(fps_string)
                 .font(FontFamily::SERIF, 24.0)
-                .text_color(piet::Color::BLACK)
+                .text_color(piet::Color::rgb8(0x11, 0x22, 0x22))
                 .build()
                 .unwrap();
 
