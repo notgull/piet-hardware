@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/piet-gpu",
-    "crates/piet-glow"
+    "crates/piet-glow",
+    "crates/piet-hardware",
 ]
 

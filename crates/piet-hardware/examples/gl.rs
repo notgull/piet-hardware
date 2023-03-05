@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later OR MPL-2.0
-// This file is a part of `piet-gpu`.
+// This file is a part of `piet-hardware`.
 //
-// `piet-gpu` is free software: you can redistribute it and/or modify it under the terms of
+// `piet-hardware` is free software: you can redistribute it and/or modify it under the terms of
 // either:
 //
 // * GNU Lesser General Public License as published by the Free Software Foundation, either
 // version 3 of the License, or (at your option) any later version.
 // * Mozilla Public License as published by the Mozilla Foundation, version 2.
 //
-// `piet-gpu` is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+// `piet-hardware` is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
 // without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 // See the GNU Lesser General Public License or the Mozilla Public License for more details.
 //
 // You should have received a copy of the GNU Lesser General Public License and the Mozilla
-// Public License along with `piet-gpu`. If not, see <https://www.gnu.org/licenses/> or
+// Public License along with `piet-hardware`. If not, see <https://www.gnu.org/licenses/> or
 // <https://www.mozilla.org/en-US/MPL/2.0/>.
 
 //! An example that uses the `gl` crate to render to a `winit` window.
@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut size = PhysicalSize::new(800, 600);
     let make_window_builder = move || {
         WindowBuilder::new()
-            .with_title("piet-gpu example")
+            .with_title("piet-hardware example")
             .with_transparent(true)
             .with_inner_size(size)
     };
@@ -148,7 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tick = 0;
 
     // Draw the window.
-    let mut draw = move |ctx: &mut piet_gpu::RenderContext<'_, GlContext>| {
+    let mut draw = move |ctx: &mut piet_hardware::RenderContext<'_, GlContext>| {
         ctx.clear(None, piet::Color::AQUA);
 
         let outline = outline.get_or_insert_with(|| ctx.solid_brush(piet::Color::BLACK));
@@ -267,7 +267,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     gl_config.display().get_proc_address(symbol_cstr.as_c_str())
                                 });
 
-                                piet_gpu::Source::new(GlContext::new()).unwrap()
+                                piet_hardware::Source::new(GlContext::new()).unwrap()
                             }
                         })
                         .context()
@@ -577,7 +577,7 @@ impl fmt::Display for GlError {
 
 impl std::error::Error for GlError {}
 
-impl piet_gpu::GpuContext for GlContext {
+impl piet_hardware::GpuContext for GlContext {
     type Error = GlError;
     type Texture = gl::types::GLuint;
     type VertexBuffer = GlVertexBuffer;
@@ -606,7 +606,7 @@ impl piet_gpu::GpuContext for GlContext {
     fn create_texture(
         &self,
         interpolation: piet::InterpolationMode,
-        repeat: piet_gpu::RepeatStrategy,
+        repeat: piet_hardware::RepeatStrategy,
     ) -> Result<Self::Texture, Self::Error> {
         self.assert_context();
 
@@ -624,7 +624,7 @@ impl piet_gpu::GpuContext for GlContext {
             gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, mag_filter as _);
 
             let (wrap_s, wrap_t) = match repeat {
-                piet_gpu::RepeatStrategy::Color(clr) => {
+                piet_hardware::RepeatStrategy::Color(clr) => {
                     let (r, g, b, a) = clr.as_rgba();
                     gl::TexParameterfv(
                         gl::TEXTURE_2D,
@@ -634,7 +634,7 @@ impl piet_gpu::GpuContext for GlContext {
 
                     (gl::CLAMP_TO_EDGE, gl::CLAMP_TO_EDGE)
                 }
-                piet_gpu::RepeatStrategy::Repeat => (gl::REPEAT, gl::REPEAT),
+                piet_hardware::RepeatStrategy::Repeat => (gl::REPEAT, gl::REPEAT),
                 _ => panic!("unsupported repeat strategy"),
             };
 
@@ -778,7 +778,7 @@ impl piet_gpu::GpuContext for GlContext {
             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
             gl::UseProgram(self.render_program);
 
-            let stride = std::mem::size_of::<piet_gpu::Vertex>() as _;
+            let stride = std::mem::size_of::<piet_hardware::Vertex>() as _;
 
             // Set up the layout:
             // - vec2 of floats for aPos
@@ -793,7 +793,7 @@ impl piet_gpu::GpuContext for GlContext {
                 gl::FLOAT,
                 gl::FALSE,
                 stride,
-                bytemuck::offset_of!(piet_gpu::Vertex, pos) as *const _,
+                bytemuck::offset_of!(piet_hardware::Vertex, pos) as *const _,
             );
 
             let atex_name = CString::new("aTexCoord").unwrap();
@@ -805,7 +805,7 @@ impl piet_gpu::GpuContext for GlContext {
                 gl::FLOAT,
                 gl::FALSE,
                 stride,
-                bytemuck::offset_of!(piet_gpu::Vertex, uv) as *const _,
+                bytemuck::offset_of!(piet_hardware::Vertex, uv) as *const _,
             );
 
             let acolor_name = CString::new("aColor").unwrap();
@@ -817,7 +817,7 @@ impl piet_gpu::GpuContext for GlContext {
                 gl::UNSIGNED_BYTE,
                 gl::FALSE,
                 stride,
-                bytemuck::offset_of!(piet_gpu::Vertex, color) as *const _,
+                bytemuck::offset_of!(piet_hardware::Vertex, color) as *const _,
             );
 
             // Unbind the vertex array object.
@@ -836,7 +836,7 @@ impl piet_gpu::GpuContext for GlContext {
     unsafe fn write_vertices(
         &self,
         buffer: &Self::VertexBuffer,
-        vertices: &[piet_gpu::Vertex],
+        vertices: &[piet_hardware::Vertex],
         indices: &[u32],
     ) {
         self.assert_context();
@@ -846,7 +846,7 @@ impl piet_gpu::GpuContext for GlContext {
             //gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, buffer.ebo);
             gl::BufferData(
                 gl::ARRAY_BUFFER,
-                (vertices.len() * std::mem::size_of::<piet_gpu::Vertex>()) as _,
+                (vertices.len() * std::mem::size_of::<piet_hardware::Vertex>()) as _,
                 vertices.as_ptr() as *const _,
                 gl::DYNAMIC_DRAW,
             );
