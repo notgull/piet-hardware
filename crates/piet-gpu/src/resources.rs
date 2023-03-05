@@ -20,6 +20,7 @@
 
 use super::gpu_backend::{GpuContext, RepeatStrategy, Vertex};
 
+use piet::kurbo::Size;
 use piet::{
     Error as Pierror, FixedLinearGradient, FixedRadialGradient, GradientStop, InterpolationMode,
 };
@@ -81,7 +82,7 @@ impl<C: GpuContext + ?Sized> Texture<C> {
     pub(crate) fn write_linear_gradient(
         &self,
         gradient: &FixedLinearGradient,
-        size: (u32, u32),
+        size: Size,
     ) -> Result<(), Pierror> {
         let shader = tiny_skia::LinearGradient::new(
             convert_to_ts_point(gradient.start),
@@ -104,7 +105,7 @@ impl<C: GpuContext + ?Sized> Texture<C> {
     pub(crate) fn write_radial_gradient(
         &self,
         gradient: &FixedRadialGradient,
-        size: (u32, u32),
+        size: Size,
     ) -> Result<(), Pierror> {
         let shader = tiny_skia::RadialGradient::new(
             convert_to_ts_point(gradient.center),
@@ -125,9 +126,10 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         Ok(())
     }
 
-    pub(crate) fn write_shader(&self, shader: Shader<'_>, (width, height): (u32, u32)) {
+    pub(crate) fn write_shader(&self, shader: Shader<'_>, size: Size) {
         // Create a pixmap to render the shader into.
-        let mut pixmap = Pixmap::new(width, height).expect("failed to create pixmap");
+        let mut pixmap =
+            Pixmap::new(size.width as _, size.height as _).expect("failed to create pixmap");
 
         // Render the shader into the pixmap.
         let paint = Paint {
@@ -136,7 +138,7 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         };
         pixmap
             .fill_rect(
-                tiny_skia::Rect::from_xywh(0.0, 0.0, width as _, height as _).unwrap(),
+                tiny_skia::Rect::from_xywh(0.0, 0.0, size.width as _, size.height as _).unwrap(),
                 &paint,
                 tiny_skia::Transform::identity(),
                 None,
@@ -145,7 +147,11 @@ impl<C: GpuContext + ?Sized> Texture<C> {
 
         // Write the pixmap into the texture.
         let data = pixmap.take();
-        self.write_texture((width, height), piet::ImageFormat::RgbaPremul, Some(&data));
+        self.write_texture(
+            (size.width as _, size.height as _),
+            piet::ImageFormat::RgbaPremul,
+            Some(&data),
+        );
         self.set_interpolation(InterpolationMode::Bilinear);
     }
 

@@ -47,11 +47,6 @@ impl<C: GpuContext + ?Sized> Image<C> {
     pub(crate) fn texture(&self) -> &Texture<C> {
         &self.texture
     }
-
-    /// Set the size of the image.
-    pub(crate) fn set_size(&mut self, size: Size) {
-        self.size = size;
-    }
 }
 
 impl<C: GpuContext + ?Sized> Clone for Image<C> {

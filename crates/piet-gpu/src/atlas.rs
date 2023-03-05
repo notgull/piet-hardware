@@ -62,7 +62,7 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
         let (max_width, max_height) = context.max_texture_size();
         let texture = Texture::new(
             context,
-            InterpolationMode::NearestNeighbor,
+            InterpolationMode::Bilinear,
             RepeatStrategy::Color(piet::Color::TRANSPARENT),
         )
         .piet_err()?;
@@ -170,10 +170,7 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                 // Insert the glyph into the texture.
                 self.texture.write_subtexture(
                     (alloc.rectangle.min.x as u32, alloc.rectangle.min.y as u32),
-                    (
-                        width as u32,
-                        height as u32,
-                    ),
+                    (width as u32, height as u32),
                     piet::ImageFormat::RgbaPremul,
                     bytemuck::cast_slice::<_, u8>(&buffer),
                 );

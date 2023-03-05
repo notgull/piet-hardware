@@ -213,8 +213,6 @@ impl<C: GpuContext + ?Sized> Default for RenderState<C> {
     }
 }
 
-impl<C: GpuContext + ?Sized> RenderContext<'_, C> {}
-
 impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
     /// Fill in a rectangle.
     fn fill_rects(
@@ -246,15 +244,7 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
 
         // Push the incoming buffers.
         // SAFETY: The indices are valid.
-        unsafe {
-            self.push_buffers(
-                brush
-                    .texture(self.size)
-                    .piet_err()?
-                    .as_ref()
-                    .map(|t| t.texture()),
-            )
-        }
+        unsafe { self.push_buffers(brush.texture(self.size).as_ref().map(|t| t.texture())) }
     }
 
     fn stroke_impl(
@@ -277,15 +267,7 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
 
         // Push the incoming buffers.
         // SAFETY: Buffer indices do not exceed the size of the vertex buffer.
-        unsafe {
-            self.push_buffers(
-                brush
-                    .texture(self.size)
-                    .piet_err()?
-                    .as_ref()
-                    .map(|t| t.texture()),
-            )
-        }
+        unsafe { self.push_buffers(brush.texture(self.size).as_ref().map(|t| t.texture())) }
     }
 
     /// Push the values currently in the renderer to the GPU.
@@ -375,12 +357,8 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
 
     fn gradient(&mut self, gradient: impl Into<FixedGradient>) -> Result<Self::Brush, Pierror> {
         match gradient.into() {
-            FixedGradient::Linear(linear) => {
-                Brush::linear_gradient(&self.source.context, linear, self.size)
-            }
-            FixedGradient::Radial(radial) => {
-                Brush::radial_gradient(&self.source.context, radial, self.size)
-            }
+            FixedGradient::Linear(linear) => Brush::linear_gradient(&self.source.context, linear),
+            FixedGradient::Radial(radial) => Brush::radial_gradient(&self.source.context, radial),
         }
     }
 
