@@ -43,10 +43,7 @@ pub use piet;
 use lyon_tessellation::FillRule;
 
 use piet::kurbo::{Affine, Point, Rect, Shape, Size};
-use piet::{
-    Error as Pierror, FixedGradient,
-    Image as _, InterpolationMode, 
-};
+use piet::{Error as Pierror, FixedGradient, Image as _, InterpolationMode};
 
 use tinyvec::TinyVec;
 
@@ -142,7 +139,7 @@ impl<C: GpuContext + ?Sized> Source<C> {
             },
             atlas: Some(Atlas::new(&context)?),
             context,
-            text: Text::new()
+            text: Text::new(),
         })
     }
 
@@ -520,7 +517,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
                         let uv_rect = match atlas.uv_rect(glyph, &font_data) {
                             Ok(rect) => rect,
                             Err(e) => {
-                                tracing::error!("failed to get uv rect: {}", e);
+                                tracing::trace!("failed to get uv rect: {}", e);
                                 return None;
                             }
                         };
@@ -656,7 +653,6 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         self.state.last().unwrap().transform
     }
 }
-
 
 trait ResultExt<T, E: StdError + 'static> {
     fn piet_err(self) -> Result<T, Pierror>;

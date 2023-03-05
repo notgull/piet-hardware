@@ -22,7 +22,7 @@
 //! crate to make GL calls.
 //!
 //! This example exists mostly to give an example of how a `GpuContext` can be implemented.
-//! In order to
+//! If you actually want to use `piet` with OpenGL, consider the `piet-glow` crate.
 
 use glutin::config::ConfigTemplateBuilder;
 use glutin::context::{ContextApi, ContextAttributesBuilder, Version};

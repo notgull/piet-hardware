@@ -111,7 +111,8 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                 let mut buffer = vec![0u32; (glyph_width * glyph_height) as usize];
 
                 // Q: Why are we using ab_glyph instead of swash, which cosmic-text uses?
-                // A: ab_glyph already exists in the winit dep tree, which this crate is intended for.
+                // A: ab_glyph already exists in the winit dep tree, which this crate is intended
+                //    to be used with.
                 let font_ref = ab_glyph::FontRef::try_from_slice(font_data.data).piet_err()?;
                 let glyph_id = ab_glyph::GlyphId(glyph.cache_key.glyph_id)
                     .with_scale(glyph.cache_key.font_size as f32);
@@ -120,11 +121,18 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                         format!("Failed to outline glyph {}", glyph.cache_key.glyph_id).into()
                     })
                 })?;
+                
+                let bounds = outline.px_bounds();
+                let x_offset = (bounds.min.x) as isize;
+                let y_offset = (glyph_height as f32 + bounds.min.y) as isize;
 
                 // Draw the glyph.
                 outline.draw(|x, y, c| {
+                    let x = x as isize + x_offset;
+                    let y = y as isize + y_offset;
+
                     let pixel = {
-                        let pixel_offset = (x + y * glyph_width as u32) as usize;
+                        let pixel_offset = (x + y * glyph_width as isize) as usize;
 
                         match buffer.get_mut(pixel_offset) {
                             Some(pixel) => pixel,

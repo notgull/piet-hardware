@@ -16,7 +16,7 @@
 // Public License along with `piet-gpu`. If not, see <https://www.gnu.org/licenses/> or
 // <https://www.mozilla.org/en-US/MPL/2.0/>.
 
-use piet::kurbo::{Size, Rect, Point};
+use piet::kurbo::{Point, Rect, Size};
 use piet::Error as Pierror;
 
 use piet_cosmic_text::{
