@@ -76,13 +76,14 @@ impl<C: GpuContext + ?Sized> Brush<C> {
         let texture = Texture::new(
             context,
             piet::InterpolationMode::Bilinear,
-            RepeatStrategy::Repeat,
+            RepeatStrategy::Clamp,
         )
         .piet_err()?;
 
         let bounds = Rect::from_points(gradient.start, gradient.end);
+        let offset = -bounds.origin().to_vec2();
 
-        texture.write_linear_gradient(&gradient, bounds.size())?;
+        texture.write_linear_gradient(&gradient, bounds.size(), offset)?;
         Ok(Self::textured(texture, bounds))
     }
 
@@ -94,13 +95,14 @@ impl<C: GpuContext + ?Sized> Brush<C> {
         let texture = Texture::new(
             context,
             piet::InterpolationMode::Bilinear,
-            RepeatStrategy::Repeat,
+            RepeatStrategy::Clamp,
         )
         .piet_err()?;
 
         let bounds = Circle::new(gradient.center, gradient.radius).bounding_box();
+        let offset = -bounds.origin().to_vec2();
 
-        texture.write_radial_gradient(&gradient, bounds.size())?;
+        texture.write_radial_gradient(&gradient, bounds.size(), offset)?;
         Ok(Self::textured(texture, bounds))
     }
 
@@ -138,11 +140,9 @@ impl<C: GpuContext + ?Sized> Brush<C> {
             BrushInner::Texture { ref image, offset } => {
                 // Create a transform to convert from image coordinates to
                 // UV coordinates.
-                let uv_transform = Affine::translate(offset.to_vec2())
-                    * Affine::scale_non_uniform(
-                        1.0 / image.size().width,
-                        1.0 / image.size().height,
-                    );
+                let uv_transform = 
+                    Affine::scale_non_uniform(1.0 / image.size().width, 1.0 / image.size().height)
+                        * Affine::translate(-offset.to_vec2());
                 let uv = uv_transform * Point::new(point[0] as f64, point[1] as f64);
                 Vertex {
                     pos: point,

@@ -197,6 +197,7 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
                     (glow::CLAMP_TO_BORDER, glow::CLAMP_TO_BORDER)
                 }
                 piet_hardware::RepeatStrategy::Repeat => (glow::REPEAT, glow::REPEAT),
+                piet_hardware::RepeatStrategy::Clamp => (glow::CLAMP_TO_EDGE, glow::CLAMP_TO_EDGE),
                 _ => panic!("unsupported repeat strategy: {repeat:?}"),
             };
 

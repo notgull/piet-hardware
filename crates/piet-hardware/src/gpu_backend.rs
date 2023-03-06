@@ -113,6 +113,9 @@ pub enum RepeatStrategy {
     /// Repeat the image.
     Repeat,
 
+    /// Clamp to the edge of the image.
+    Clamp,
+
     /// Don't repeat and instead use this color.
     Color(piet::Color),
 }

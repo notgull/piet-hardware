@@ -20,7 +20,7 @@
 
 use super::gpu_backend::{GpuContext, RepeatStrategy, Vertex};
 
-use piet::kurbo::Size;
+use piet::kurbo::{Size, Vec2};
 use piet::{
     Error as Pierror, FixedLinearGradient, FixedRadialGradient, GradientStop, InterpolationMode,
 };
@@ -83,6 +83,7 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         &self,
         gradient: &FixedLinearGradient,
         size: Size,
+        offset: Vec2,
     ) -> Result<(), Pierror> {
         let shader = tiny_skia::LinearGradient::new(
             convert_to_ts_point(gradient.start),
@@ -93,7 +94,7 @@ impl<C: GpuContext + ?Sized> Texture<C> {
                 .map(convert_to_ts_gradient_stop)
                 .collect(),
             tiny_skia::SpreadMode::Pad,
-            tiny_skia::Transform::identity(),
+            tiny_skia::Transform::from_translate(offset.x as f32, offset.y as f32),
         )
         .ok_or_else(|| Pierror::BackendError("Invalid error".into()))?;
 
@@ -106,6 +107,7 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         &self,
         gradient: &FixedRadialGradient,
         size: Size,
+        offset: Vec2,
     ) -> Result<(), Pierror> {
         let shader = tiny_skia::RadialGradient::new(
             convert_to_ts_point(gradient.center),
@@ -117,7 +119,7 @@ impl<C: GpuContext + ?Sized> Texture<C> {
                 .map(convert_to_ts_gradient_stop)
                 .collect(),
             tiny_skia::SpreadMode::Pad,
-            tiny_skia::Transform::identity(),
+            tiny_skia::Transform::from_translate(offset.x as f32, offset.y as f32),
         )
         .ok_or_else(|| Pierror::BackendError("Invalid error".into()))?;
 
