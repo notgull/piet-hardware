@@ -27,7 +27,7 @@ use cosmic_text::{CacheKey, LayoutGlyph};
 use etagere::{Allocation, AtlasAllocator};
 use hashbrown::hash_map::{Entry, HashMap};
 
-use piet::kurbo::{Point, Rect};
+use piet::kurbo::{Point, Rect, Size};
 use piet::{Error as Pierror, InterpolationMode};
 
 use std::rc::Rc;
@@ -47,13 +47,25 @@ pub(crate) struct Atlas<C: GpuContext + ?Sized> {
     glyphs: HashMap<CacheKey, Position, RandomState>,
 }
 
+/// The data needed for rendering a glyph.
+pub(crate) struct GlyphData {
+    /// The UV rectangle for the glyph.
+    pub(crate) uv_rect: Rect,
+
+    /// The size of the glyph.
+    pub(crate) size: Size,
+
+    /// The offset at which to draw the glyph.
+    pub(crate) offset: Point,
+}
+
 /// The positioning of a glyph in the atlas.
 struct Position {
     /// The allocation of the glyph in the atlas.
     allocation: Allocation,
 
-    /// The offset at which to draw the glyph.
-    offset: Point,
+    /// The rectangle of the glyph relative to the position.
+    rect: Rect,
 }
 
 impl<C: GpuContext + ?Sized> Atlas<C> {
@@ -90,21 +102,29 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
         &mut self,
         glyph: &LayoutGlyph,
         font_data: &cosmic_text::Font<'_>,
-    ) -> Result<(Rect, Point), Pierror> {
+    ) -> Result<GlyphData, Pierror> {
         let alloc_to_rect = {
             let (width, height) = self.size;
             move |posn: &Position| {
                 let alloc = &posn.allocation;
 
-                (
-                    Rect::new(
-                        alloc.rectangle.min.x as f64 / width as f64,
-                        alloc.rectangle.min.y as f64 / height as f64,
-                        alloc.rectangle.max.x as f64 / width as f64,
-                        alloc.rectangle.max.y as f64 / height as f64,
-                    ),
-                    posn.offset,
-                )
+                let max_x = alloc.rectangle.min.x + posn.rect.width() as i32;
+                let max_y = alloc.rectangle.min.y + posn.rect.height() as i32;
+
+                let uv_rect = Rect::new(
+                    alloc.rectangle.min.x as f64 / width as f64,
+                    alloc.rectangle.min.y as f64 / height as f64,
+                    max_x as f64 / width as f64,
+                    max_y as f64 / height as f64,
+                );
+                let offset = posn.rect.origin();
+                let size = posn.rect.size();
+
+                GlyphData {
+                    uv_rect,
+                    size,
+                    offset,
+                }
             }
         };
 
@@ -175,9 +195,11 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                 // Insert the allocation into the map.
                 let alloc = v.insert(Position {
                     allocation: alloc,
-                    offset: Point::new(
-                        bounds.min.x.into(),
-                        (glyph.cache_key.font_size as f32 + bounds.min.y).into(),
+                    rect: Rect::new(
+                        bounds.min.x as f64,
+                        bounds.min.y as f64,
+                        bounds.max.x as f64,
+                        bounds.max.y as f64,
                     ),
                 });
 

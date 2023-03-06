@@ -66,7 +66,7 @@ pub use self::gpu_backend::{BufferType, GpuContext, RepeatStrategy, Vertex, Vert
 pub use self::image::Image;
 pub use self::text::{Text, TextLayout, TextLayoutBuilder};
 
-pub(crate) use atlas::Atlas;
+pub(crate) use atlas::{Atlas, GlyphData};
 pub(crate) use mask::MaskSlot;
 pub(crate) use rasterizer::{Rasterizer, TessRect};
 pub(crate) use resources::{Texture, VertexBuffer};
@@ -483,7 +483,11 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
                             .font_system()
                             .get_font(glyph.cache_key.font_id)
                             .expect("font not found");
-                        let (uv_rect, offset) = match atlas.uv_rect(glyph, &font_data) {
+                        let GlyphData {
+                            uv_rect,
+                            offset,
+                            size,
+                        } = match atlas.uv_rect(glyph, &font_data) {
                             Ok(rect) => rect,
                             Err(e) => {
                                 tracing::trace!("failed to get uv rect: {}", e);
@@ -497,7 +501,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
                                 glyph.x_int as f64 + pos.x + offset.x,
                                 glyph.y_int as f64 + line_y + pos.y + offset.y,
                             ),
-                            (glyph.w as f64, glyph.cache_key.font_size as f64),
+                            size,
                         );
 
                         let color = match glyph.color_opt {
