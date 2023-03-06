@@ -140,7 +140,7 @@ impl<C: GpuContext + ?Sized> Brush<C> {
             BrushInner::Texture { ref image, offset } => {
                 // Create a transform to convert from image coordinates to
                 // UV coordinates.
-                let uv_transform = 
+                let uv_transform =
                     Affine::scale_non_uniform(1.0 / image.size().width, 1.0 / image.size().height)
                         * Affine::translate(-offset.to_vec2());
                 let uv = uv_transform * Point::new(point[0] as f64, point[1] as f64);
