@@ -3,6 +3,12 @@ name = "piet-hardware"
 version = "0.1.0"
 edition = "2021"
 license = "LGPL-3.0-or-later OR MPL-2.0"
+rust-version = "1.65.0"
+authors = ["John Nunley <jtnunley01@gmail.com>"]
+repository = "https://github.com/notgull/piet-hardware"
+homepage = "https://github.com/notgull/piet-hardware/crates/piet-hardware"
+keywords = ["gpu", "graphics", "2d"]
+categories = ["rendering::graphics-api"]
 
 [dependencies]
 ab_glyph = "0.2.20"
