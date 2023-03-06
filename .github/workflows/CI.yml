@@ -31,7 +31,8 @@ jobs:
   
   msrv:
     strategy:
-      rust: [1.65.0]
+      matrix:
+        rust: [1.65.0]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
