@@ -36,8 +36,8 @@ macro_rules! c {
     }};
 }
 
-const VERTEX_SHADER: &str = include_str!("../../../shaders/glow.v.glsl");
-const FRAGMENT_SHADER: &str = include_str!("../../../shaders/glow.f.glsl");
+const VERTEX_SHADER: &str = include_str!("./shaders/glow.v.glsl");
+const FRAGMENT_SHADER: &str = include_str!("./shaders/glow.f.glsl");
 
 #[derive(Debug, Clone, Copy)]
 enum Uniforms {
