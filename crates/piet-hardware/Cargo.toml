@@ -9,6 +9,7 @@ repository = "https://github.com/notgull/piet-hardware"
 homepage = "https://github.com/notgull/piet-hardware/crates/piet-hardware"
 keywords = ["gpu", "graphics", "2d"]
 categories = ["rendering::graphics-api"]
+description = "Toolkit for creating GPU accelerated 2D graphics applications"
 
 [dependencies]
 ab_glyph = "0.2.20"

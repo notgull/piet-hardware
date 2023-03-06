@@ -9,6 +9,7 @@ repository = "https://github.com/notgull/piet-hardware"
 homepage = "https://github.com/notgull/piet-hardware/crates/piet-glow"
 keywords = ["gpu", "graphics", "2d"]
 categories = ["rendering::graphics-api"]
+description = "A hardware-accelerated 2D graphics backend for piet using glow"
 
 [dependencies]
 bytemuck = { version = "1.13.1", default-features = false }
