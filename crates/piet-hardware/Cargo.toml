@@ -21,7 +21,7 @@ etagere = "0.2.7"
 hashbrown = { version = "0.13.2", default-features = false }
 lyon_tessellation = "1.0.10"
 piet = { version = "0.6.2", default-features = false }
-piet-cosmic-text = "0.1.1"
+piet-cosmic-text = "0.2.0"
 tiny-skia = { version = "0.8.3", default-features = false, features = ["std"] }
 tinyvec = { version = "1.6.0", default-features = false, features = ["alloc"] }
 tracing = { version = "0.1.37", default-features = false }
