@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Get the test image at $CRATE_ROOT/examples/assets/test-image.png
     let manifest_root = env!("CARGO_MANIFEST_DIR");
-    let path = Path::new(manifest_root).join("examples/assets/test-image.png");
+    let path = Path::new(manifest_root).join("examples/assets/oranges.jpg");
     let image = image::open(path)?.to_rgba8();
 
     // Convert the image to a byte buffer.

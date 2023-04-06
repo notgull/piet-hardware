@@ -16,12 +16,12 @@ ab_glyph = "0.2.20"
 ahash = { version = "0.8.3", default-features = false, features = ["std"] }
 arrayvec = "0.7.2"
 bytemuck = { version = "1.13.0", default-features = false, features = ["derive"] }
-cosmic-text = { version = "0.7.0", default-features = false }
+cosmic-text = { version = "0.8.0", default-features = false }
 etagere = "0.2.7"
 hashbrown = { version = "0.13.2", default-features = false }
 lyon_tessellation = "1.0.10"
 piet = { version = "0.6.2", default-features = false }
-piet-cosmic-text = "0.1.1"
+piet-cosmic-text = "0.2.0"
 tiny-skia = { version = "0.8.3", default-features = false, features = ["std"] }
 tinyvec = { version = "1.6.0", default-features = false, features = ["alloc"] }
 tracing = { version = "0.1.37", default-features = false }
