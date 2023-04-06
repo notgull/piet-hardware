@@ -101,7 +101,7 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
     pub(crate) fn uv_rect(
         &mut self,
         glyph: &LayoutGlyph,
-        font_data: &cosmic_text::Font<'_>,
+        font_data: &cosmic_text::Font,
     ) -> Result<GlyphData, Pierror> {
         let alloc_to_rect = {
             let (width, height) = self.size;
@@ -142,9 +142,9 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                 // Q: Why are we using ab_glyph instead of swash, which cosmic-text uses?
                 // A: ab_glyph already exists in the winit dep tree, which this crate is intended
                 //    to be used with.
-                let font_ref = ab_glyph::FontRef::try_from_slice(font_data.data).piet_err()?;
+                let font_ref = ab_glyph::FontRef::try_from_slice(font_data.data()).piet_err()?;
                 let glyph_id = ab_glyph::GlyphId(glyph.cache_key.glyph_id)
-                    .with_scale(glyph.cache_key.font_size as f32);
+                    .with_scale(f32::from_bits(glyph.cache_key.font_size_bits));
                 let outline = font_ref.outline_glyph(glyph_id).ok_or_else(|| {
                     Pierror::BackendError({
                         format!("Failed to outline glyph {}", glyph.cache_key.glyph_id).into()

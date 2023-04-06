@@ -464,6 +464,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
 
         // Iterate over the glyphs and use them to write.
         let texture = restore.atlas.as_ref().unwrap().texture().clone();
+        let text = restore.context.text().clone();
         let result = restore.context.fill_rects(
             layout
                 .buffer()
@@ -478,11 +479,10 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
                     let atlas = restore.atlas.as_mut().unwrap();
                     |(glyph, line_y)| {
                         // Get the rectangle in texture space representing the glyph.
-                        let font_data = layout
-                            .buffer()
-                            .font_system()
-                            .get_font(glyph.cache_key.font_id)
-                            .expect("font not found");
+                        let font_data = text.with_font_system_mut(|fs| {
+                            fs.get_font(glyph.cache_key.font_id)
+                                .expect("font not found")
+                        });
                         let GlyphData {
                             uv_rect,
                             offset,

@@ -32,6 +32,14 @@ impl Text {
     pub(crate) fn new() -> Self {
         Self(CosText::new())
     }
+
+    /// Run a function with the `FontSystem` associated with this type.
+    pub(crate) fn with_font_system_mut<R>(
+        &self,
+        f: impl FnOnce(&mut cosmic_text::FontSystem) -> R,
+    ) -> R {
+        self.0.with_font_system_mut(f)
+    }
 }
 
 impl piet::Text for Text {
@@ -87,7 +95,7 @@ impl piet::TextLayoutBuilder for TextLayoutBuilder {
 pub struct TextLayout(CosTextLayout);
 
 impl TextLayout {
-    pub(crate) fn buffer(&self) -> &cosmic_text::Buffer<'_> {
+    pub(crate) fn buffer(&self) -> &cosmic_text::Buffer {
         self.0.buffer()
     }
 }
