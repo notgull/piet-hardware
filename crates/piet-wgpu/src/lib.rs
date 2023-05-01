@@ -29,8 +29,8 @@ use std::convert::Infallible;
 use std::mem;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::rc::Rc;
-use std::sync::Arc;
 
+use piet_hardware::piet::kurbo::Affine;
 use piet_hardware::piet::{Color, ImageFormat, InterpolationMode};
 use piet_hardware::{RepeatStrategy, TextureType, Vertex};
 
@@ -38,7 +38,7 @@ use wgpu::util::DeviceExt;
 
 const SHADER_SOURCE: &str = include_str!("piet.wgsl");
 
-/// A reference to a [`wgpu`] [`Device`] and [`Queue`].
+/// A reference to a [`wgpu`] [`Device`], and [`Queue`].
 ///
 /// [`wgpu`]: https://crates.io/crates/wgpu
 /// [`Device`]: https://docs.rs/wgpu/latest/wgpu/struct.Device.html
@@ -75,19 +75,42 @@ struct GpuContext<DaQ: ?Sized> {
     /// Bind group for textures.
     texture_bind_group: wgpu::BindGroupLayout,
 
+    /// The clearing color.
+    clear_color: Cell<Option<Color>>,
+
     /// Unique ID.
     id: Cell<usize>,
+
+    /// The list of buffers to push.
+    buffer_pushes: RefCell<Vec<BufferPush>>,
+
+    /// The view of the texture.
+    texture_view: RefCell<Option<wgpu::TextureView>>,
 
     /// The `wgpu` device and queue.
     device_and_queue: DaQ,
 }
 
-struct CurrentRenderState {
-    /// The clear-color in use.
-    clear_color: Option<Color>,
+struct BufferPush {
+    /// The buffer to push.
+    buffer: Rc<BufferInner>,
+
+    /// The texture used as the base color.
+    base_color: Rc<TextureInner>,
+
+    /// The texture used as the mask.
+    mask: Rc<TextureInner>,
+
+    /// The transform to apply.
+    transform: Affine,
+
+    /// The viewport size.
+    viewport_size: [u32; 2],
 }
 
-struct WgpuTexture {
+struct WgpuTexture(Rc<TextureInner>);
+
+struct TextureInner {
     /// The sampler to use for texturing.
     sampler: wgpu::Sampler,
 
@@ -109,7 +132,18 @@ struct SetWgpuTexture {
     bind_group: wgpu::BindGroup,
 }
 
-struct WgpuVertexBuffer {}
+struct WgpuVertexBuffer(Rc<BufferInner>);
+
+struct BufferInner {
+    /// The vertex buffer.
+    vertex_buffer: wgpu::Buffer,
+
+    /// The index buffer.
+    index_buffer: wgpu::Buffer,
+
+    /// The number if indices.
+    index_count: Cell<u32>,
+}
 
 /// Type of the data stored in the uniform buffer.
 #[repr(C)]
@@ -294,6 +328,9 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
             uniform_buffer,
             uniform_bind_group,
             texture_bind_group: texture_buffer_layout,
+            clear_color: Cell::new(None),
+            buffer_pushes: RefCell::new(Vec::new()),
+            texture_view: RefCell::new(None),
             id: Cell::new(0),
         }
     }
@@ -311,11 +348,82 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
     type Error = Infallible;
 
     fn clear(&self, color: piet_hardware::piet::Color) {
-        todo!()
+        // Set the inner clear color.
+        self.clear_color.set(Some(color));
     }
 
     fn flush(&self) -> Result<(), Self::Error> {
-        todo!()
+        // Create a command encoder and a render pass.
+        let texture_view = self.texture_view.borrow();
+        let mut pushes = self.buffer_pushes.borrow_mut();
+
+        let mut encoder = self.device_and_queue.device().create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("piet-wgpu command encoder"),
+        });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("piet-wgpu render pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: texture_view.as_ref().expect("no texture view"),
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: match self.clear_color.take() {
+                        None => wgpu::LoadOp::Load,
+                        Some(clr) => wgpu::LoadOp::Clear({
+                            let (r, g, b, a) = clr.as_rgba();
+                            wgpu::Color { r, g, b, a }
+                        })
+                    },
+                    store: true,
+                } 
+            })],
+            depth_stencil_attachment: None,
+        });
+
+        pass.set_pipeline(&self.pipeline);
+
+        // Push any buffers that we need to push.
+        for BufferPush { buffer, base_color, mask, transform, viewport_size } in pushes.iter() {
+            pass.set_viewport(
+                0.0,
+                0.0,
+                viewport_size[0] as f32,
+                viewport_size[1] as f32,
+                0.0,
+                1.0
+            );
+
+            // Set up the uniforms.
+            let uniforms = Uniforms {
+                transform: affine_to_column_major(transform),
+                viewport_size: [viewport_size[0] as f32, viewport_size[1] as f32],
+            };
+            self.device_and_queue.queue().write_buffer(
+                &self.uniform_buffer,
+                0,
+                bytemuck::cast_slice(&[uniforms])
+            );
+            pass.set_bind_group(
+                0,
+                &self.uniform_bind_group,
+                &[]
+            );
+
+            // TODO: Texture bind groups.
+            pass.set_vertex_buffer(0, buffer.vertex_buffer.slice(..));
+            pass.set_index_buffer(buffer.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+            pass.draw_indexed(
+                0..buffer.index_count.get(),
+                0,
+                0..1
+            );
+        }
+
+        // Finish the buffer and submit it.
+        drop(pass);
+        self.device_and_queue.queue().submit(Some(encoder.finish()));
+
+        Ok(())
     }
 
     fn create_texture(
@@ -367,11 +475,11 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
                 ..Default::default()
             });
 
-        Ok(WgpuTexture {
+        Ok(WgpuTexture(Rc::new(TextureInner {
             sampler,
             texture_type: ty,
             texture: RefCell::new(None),
-        })
+        })))
     }
 
     fn delete_texture(&self, texture: Self::Texture) {
@@ -447,7 +555,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         );
 
         // Set the texture in the texture object.
-        tex.texture.replace(Some(SetWgpuTexture {
+        tex.0.texture.replace(Some(SetWgpuTexture {
             texture,
             format,
             bind_group: todo!(),
@@ -483,7 +591,8 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
     }
 
     fn delete_vertex_buffer(&self, buffer: Self::VertexBuffer) {
-        todo!()
+        // Drop the buffer.
+        drop(buffer);
     }
 
     unsafe fn write_vertices(
@@ -500,9 +609,20 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         vertex_buffer: &Self::VertexBuffer,
         current_texture: &Self::Texture,
         mask_texture: &Self::Texture,
-        transform: &piet_hardware::piet::kurbo::Affine,
+        transform: &Affine,
         size: (u32, u32),
     ) -> Result<(), Self::Error> {
         todo!()
     }
+}
+
+fn affine_to_column_major(affine: &Affine) -> [[f32; 3]; 3] {
+    let [a, b, c, d, e, f] = affine.as_coeffs();
+
+    // Column major
+    [
+        [a as f32, b as f32, 0.0],
+        [c as f32, d as f32, 0.0],
+        [e as f32, f as f32, 1.0],
+    ]
 }

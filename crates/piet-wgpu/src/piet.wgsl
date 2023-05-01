@@ -26,3 +26,9 @@ struct Uniforms {
     // Viewport size.
     viewport_size: vec2<f32>,
 };
+
+@group(0) @binding(0) uniforms: Uniforms;
+@group(1) @binding(0) texColor: texture_2d<f32>;
+@group(1) @binding(1) texSampler: sampler;
+@group(2) @binding(0) maskColor: texture_2d<f32>;
+@group(2) @binding(1) maskSampler: sampler;
