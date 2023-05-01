@@ -235,8 +235,12 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
             _ => panic!("unsupported image format: {format:?}"),
         };
 
-        let total_len = (width * height * data_width) as usize;
         if let Some(data) = data {
+            let total_len = usize::try_from(width)
+                .ok()
+                .and_then(|width| width.checked_mul(height.try_into().ok()?))
+                .and_then(|total| total.checked_mul(data_width.try_into().ok()?))
+                .expect("image data too large");
             assert_eq!(data.len(), total_len);
         }
 
