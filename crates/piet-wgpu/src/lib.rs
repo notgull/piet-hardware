@@ -24,11 +24,15 @@
 //! [`piet`]: https://crates.io/crates/piet
 //! [`wgpu`]: https://crates.io/crates/wgpu
 
+use std::cell::{Cell, RefCell};
 use std::convert::Infallible;
 use std::mem;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::rc::Rc;
 use std::sync::Arc;
+
+use piet_hardware::piet::{Color, ImageFormat, InterpolationMode};
+use piet_hardware::{RepeatStrategy, TextureType, Vertex};
 
 use wgpu::util::DeviceExt;
 
@@ -65,11 +69,45 @@ struct GpuContext<DaQ: ?Sized> {
     /// The uniform buffer.
     uniform_buffer: wgpu::Buffer,
 
+    /// Bind group for uniforms.
+    uniform_bind_group: wgpu::BindGroup,
+
+    /// Bind group for textures.
+    texture_bind_group: wgpu::BindGroupLayout,
+
+    /// The color to use to clear the screen.
+    clear_color: Cell<Option<Color>>,
+
+    /// Unique ID.
+    id: Cell<usize>,
+
     /// The `wgpu` device and queue.
     device_and_queue: DaQ,
 }
 
-struct WgpuTexture {}
+struct CurrentRenderState {}
+
+struct WgpuTexture {
+    /// The sampler to use for texturing.
+    sampler: wgpu::Sampler,
+
+    /// Is this a mask or not?
+    texture_type: TextureType,
+
+    /// The underlying texture state.
+    texture: RefCell<Option<SetWgpuTexture>>,
+}
+
+struct SetWgpuTexture {
+    /// The texture to render to.
+    texture: wgpu::Texture,
+
+    /// The image format we used to render.
+    format: ImageFormat,
+
+    /// The bind group for the texture.
+    bind_group: wgpu::BindGroup,
+}
 
 struct WgpuVertexBuffer {}
 
@@ -85,10 +123,11 @@ struct Uniforms {
 }
 
 impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
-    pub fn new(
+    fn new(
         device_and_queue: DaQ,
         output_color_format: wgpu::TextureFormat,
         output_depth_format: Option<wgpu::TextureFormat>,
+        samples: u32,
     ) -> Self
     where
         DaQ: Sized,
@@ -195,10 +234,75 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("piet-wgpu pipeline"),
             layout: Some(&pipeline_layout),
-            ..todo!()
+            vertex: wgpu::VertexState {
+                entry_point: "vertex_main",
+                module: &shader,
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: mem::size_of::<Vertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![
+                        // pos: [f32; 2]
+                        0 => Float32x2,
+                        // uv: [f32; 2]
+                        1 => Float32x2,
+                        // color: [u8; 4]
+                        2 => Uint32,
+                    ],
+                }],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                unclipped_depth: false,
+                conservative: false,
+                cull_mode: None,
+                front_face: wgpu::FrontFace::default(),
+                polygon_mode: wgpu::PolygonMode::default(),
+                strip_index_format: None,
+            },
+            depth_stencil,
+            multisample: wgpu::MultisampleState {
+                alpha_to_coverage_enabled: false,
+                count: samples,
+                mask: !0,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fragment_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: output_color_format,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview: None,
         });
 
-        todo!()
+        Self {
+            device_and_queue,
+            pipeline,
+            uniform_buffer,
+            uniform_bind_group,
+            texture_bind_group: texture_buffer_layout,
+            clear_color: Cell::new(None),
+            id: Cell::new(0),
+        }
+    }
+
+    fn next_id(&self) -> usize {
+        let id = self.id.get();
+        self.id.set(id.wrapping_add(1));
+        id
     }
 }
 
@@ -219,22 +323,136 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         &self,
         interpolation: piet_hardware::piet::InterpolationMode,
         repeat: piet_hardware::RepeatStrategy,
+        ty: TextureType,
     ) -> Result<Self::Texture, Self::Error> {
-        todo!()
+        let id = self.next_id();
+        let filter_mode = match interpolation {
+            InterpolationMode::Bilinear => wgpu::FilterMode::Linear,
+            InterpolationMode::NearestNeighbor => wgpu::FilterMode::Nearest,
+        };
+
+        let mut border_color = None;
+        let address_mode = match repeat {
+            RepeatStrategy::Clamp => wgpu::AddressMode::ClampToEdge,
+            RepeatStrategy::Repeat => wgpu::AddressMode::Repeat,
+            RepeatStrategy::Color(color) => {
+                border_color = Some({
+                    if color == Color::TRANSPARENT {
+                        wgpu::SamplerBorderColor::TransparentBlack
+                    } else if color == Color::BLACK {
+                        wgpu::SamplerBorderColor::OpaqueBlack
+                    } else if color == Color::WHITE {
+                        wgpu::SamplerBorderColor::OpaqueWhite
+                    } else {
+                        tracing::warn!("Invalid border color for sampler: {:?}", color);
+                        wgpu::SamplerBorderColor::OpaqueWhite
+                    }
+                });
+
+                wgpu::AddressMode::ClampToBorder
+            }
+            _ => panic!("unknown repeat strategy"),
+        };
+
+        let sampler = self
+            .device_and_queue
+            .device()
+            .create_sampler(&wgpu::SamplerDescriptor {
+                label: Some(&format!("piet-wgpu sampler {}", id)),
+                compare: None,
+                mag_filter: filter_mode,
+                min_filter: filter_mode,
+                address_mode_u: address_mode,
+                address_mode_v: address_mode,
+                border_color,
+                ..Default::default()
+            });
+
+        Ok(WgpuTexture {
+            sampler,
+            texture_type: ty,
+            texture: RefCell::new(None),
+        })
     }
 
     fn delete_texture(&self, texture: Self::Texture) {
-        todo!()
+        // Just drop the texture.
+        drop(texture);
     }
 
     fn write_texture(
         &self,
-        texture: &Self::Texture,
+        tex: &Self::Texture,
         size: (u32, u32),
         format: piet_hardware::piet::ImageFormat,
         data: Option<&[u8]>,
     ) {
-        todo!()
+        let bytes_per_pixel = match format {
+            ImageFormat::Grayscale => 1u32,
+            ImageFormat::Rgb => 3,
+            ImageFormat::RgbaPremul => 4,
+            ImageFormat::RgbaSeparate => 4,
+            _ => panic!("Unsupported"),
+        };
+
+        let size = wgpu::Extent3d {
+            width: size.0,
+            height: size.0,
+            depth_or_array_layers: 1,
+        };
+        let texture = self
+            .device_and_queue
+            .device()
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("piet-wgpu texture"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: match format {
+                    ImageFormat::Grayscale => wgpu::TextureFormat::R8Unorm,
+                    ImageFormat::Rgb => panic!("Unsupported"),
+                    ImageFormat::RgbaPremul => wgpu::TextureFormat::Rgba8UnormSrgb,
+                    ImageFormat::RgbaSeparate => wgpu::TextureFormat::Rgba8UnormSrgb,
+                    _ => panic!("Unsupported"),
+                },
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[wgpu::TextureFormat::Rgba8UnormSrgb],
+            });
+
+        let zeroes;
+        let data = match data {
+            Some(data) => data,
+            None => {
+                zeroes =
+                    vec![0; size.width as usize * size.height as usize * bytes_per_pixel as usize];
+                &zeroes
+            }
+        };
+
+        // Queue a data write to the texture.
+        self.device_and_queue.queue().write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            data,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: NonZeroU32::new(size.width * bytes_per_pixel),
+                rows_per_image: NonZeroU32::new(size.height),
+            },
+            size,
+        );
+
+        // Set the texture in the texture object.
+        tex.texture.replace(Some(SetWgpuTexture {
+            texture,
+            format,
+            bind_group: todo!(),
+        }));
     }
 
     fn write_subtexture(

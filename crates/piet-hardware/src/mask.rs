@@ -21,6 +21,8 @@
 
 //! The mask used for clipping.
 
+use crate::gpu_backend::TextureType;
+
 use super::gpu_backend::{GpuContext, RepeatStrategy};
 use super::resources::Texture;
 use super::ResultExt;
@@ -109,6 +111,7 @@ impl<C: GpuContext + ?Sized> MaskSlot<C> {
                         context,
                         InterpolationMode::Bilinear,
                         RepeatStrategy::Color(piet::Color::TRANSPARENT),
+                        TextureType::Mask,
                     )
                     .piet_err()?,
                 };

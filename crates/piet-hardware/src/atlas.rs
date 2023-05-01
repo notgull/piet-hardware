@@ -21,7 +21,7 @@
 
 //! The text atlas, which is used to cache glyphs.
 
-use super::gpu_backend::{GpuContext, RepeatStrategy};
+use super::gpu_backend::{GpuContext, RepeatStrategy, TextureType};
 use super::resources::Texture;
 use super::ResultExt;
 
@@ -82,6 +82,7 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
             context,
             InterpolationMode::Bilinear,
             RepeatStrategy::Color(piet::Color::TRANSPARENT),
+            TextureType::Input,
         )
         .piet_err()?;
 
