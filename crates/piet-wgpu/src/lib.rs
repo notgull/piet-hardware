@@ -41,6 +41,9 @@ const SHADER_SOURCE: &str = include_str!("piet.wgsl");
 
 /// A reference to a [`wgpu`] [`Device`], and [`Queue`].
 ///
+/// This is used by the GPU context to create resources. It can take the form of a (Device, Queue)
+/// tuple, or a tuple of references to them.
+///
 /// [`wgpu`]: https://crates.io/crates/wgpu
 /// [`Device`]: https://docs.rs/wgpu/latest/wgpu/struct.Device.html
 /// [`Queue`]: https://docs.rs/wgpu/latest/wgpu/struct.Queue.html
@@ -99,6 +102,7 @@ struct GpuContext<DaQ: ?Sized> {
     device_and_queue: DaQ,
 }
 
+/// Represents a `push_buffers` call that we are waiting to render.
 struct BufferPush {
     /// The buffer to push.
     buffer: Rc<BufferInner>,
@@ -116,8 +120,10 @@ struct BufferPush {
     viewport_size: [u32; 2],
 }
 
+/// The resource representing a WGPU texture.
 struct WgpuTexture(Rc<RefCell<TextureInner>>);
 
+/// Inner data for a texture.
 struct TextureInner {
     /// The texture ID.
     id: usize,
@@ -136,9 +142,13 @@ struct TextureInner {
 
     /// The address mode.
     address_mode: wgpu::AddressMode,
+
+    /// The border color.
+    border_color: Option<wgpu::SamplerBorderColor>,
 }
 
 impl TextureInner {
+    /// Re-create the `BindGroup` from the current data.
     fn recompute_bind_group<DaQ: DeviceAndQueue + ?Sized>(&mut self, base: &GpuContext<DaQ>) {
         let texture = match self.texture.as_ref() {
             Some(texture) => texture,
@@ -172,8 +182,10 @@ impl TextureInner {
     }
 }
 
+/// The resource representing a WGPU buffer.
 struct WgpuVertexBuffer(Rc<BufferInner>);
 
+/// Inner data for a buffer.
 struct BufferInner {
     /// The buffer for vertices.
     vertex_buffer: RefCell<Buffer>,
@@ -182,6 +194,7 @@ struct BufferInner {
     index_buffer: RefCell<Buffer>,
 }
 
+/// Describes the data for a buffer.
 struct Buffer {
     /// The index of the inner WGPU buffer.
     id: usize,
@@ -267,6 +280,7 @@ struct Uniforms {
 }
 
 impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
+    /// Create a new GPU context.
     fn new(
         device_and_queue: DaQ,
         output_color_format: wgpu::TextureFormat,
@@ -443,9 +457,9 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
 
     fn flush(&self) -> Result<(), Self::Error> {
         let texture_view = self.texture_view.borrow();
-        let mut pushes = self.buffer_pushes.borrow_mut();
-        let mut bind_groups = self.texture_bind_groups.borrow_mut();
-        let mut buffers = self.buffers.borrow_mut();
+        let pushes = self.buffer_pushes.borrow();
+        let bind_groups = self.texture_bind_groups.borrow();
+        let buffers = self.buffers.borrow();
 
         // Create a command encoder and a render pass.
         let mut encoder = self.device_and_queue.device().create_command_encoder(
@@ -517,6 +531,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
             pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
+            // Draw the triangles.
             pass.draw_indexed(
                 0..buffer
                     .index_buffer
@@ -591,6 +606,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
             format: ImageFormat::Grayscale,
             sampler,
             interpolation,
+            border_color,
             address_mode,
         }))))
     }
@@ -613,13 +629,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         format: piet_hardware::piet::ImageFormat,
         data: Option<&[u8]>,
     ) {
-        let bytes_per_pixel = match format {
-            ImageFormat::Grayscale => 1u32,
-            ImageFormat::Rgb => 3,
-            ImageFormat::RgbaPremul => 4,
-            ImageFormat::RgbaSeparate => 4,
-            _ => panic!("Unsupported"),
-        };
+        let bytes_per_pixel = bytes_per_pixel(format);
 
         let size = wgpu::Extent3d {
             width: size.0,
@@ -697,18 +707,12 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         format: piet_hardware::piet::ImageFormat,
         data: &[u8],
     ) {
-        let mut guard = texture.0.borrow_mut();
+        let guard = texture.0.borrow_mut();
         if guard.format != format {
             panic!("write_subtexture format mismatch");
         }
 
-        let bytes_per_pixel = match format {
-            ImageFormat::Grayscale => 1u32,
-            ImageFormat::Rgb => 3,
-            ImageFormat::RgbaPremul => 4,
-            ImageFormat::RgbaSeparate => 4,
-            _ => panic!("Unsupported"),
-        };
+        let bytes_per_pixel = bytes_per_pixel(format);
 
         // Queue a data write to the texture.
         self.device_and_queue.queue().write_texture(
@@ -755,7 +759,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
                         min_filter: interp_mode,
                         address_mode_u: guard.address_mode,
                         address_mode_v: guard.address_mode,
-                        // TODO
+                        border_color: guard.border_color,
                         ..Default::default()
                     });
             guard.recompute_bind_group(self);
@@ -833,6 +837,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
             0,
             bytemuck::cast_slice(vertices),
         );
+        vb.len = vertices.len();
 
         // Write the indices.
         self.device_and_queue.queue().write_buffer(
@@ -840,6 +845,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
             0,
             bytemuck::cast_slice(indices),
         );
+        ib.len = indices.len();
     }
 
     fn push_buffers(
@@ -872,4 +878,14 @@ fn affine_to_column_major(affine: &Affine) -> [[f32; 3]; 3] {
         [c as f32, d as f32, 0.0],
         [e as f32, f as f32, 1.0],
     ]
+}
+
+fn bytes_per_pixel(format: ImageFormat) -> u32 {
+    match format {
+        ImageFormat::Grayscale => 1u32,
+        ImageFormat::Rgb => 3,
+        ImageFormat::RgbaPremul => 4,
+        ImageFormat::RgbaSeparate => 4,
+        _ => panic!("Unsupported"),
+    }
 }
