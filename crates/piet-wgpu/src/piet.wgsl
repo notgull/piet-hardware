@@ -27,8 +27,66 @@ struct Uniforms {
     viewport_size: vec2<f32>,
 };
 
-@group(0) @binding(0) uniforms: Uniforms;
-@group(1) @binding(0) texColor: texture_2d<f32>;
-@group(1) @binding(1) texSampler: sampler;
-@group(2) @binding(0) maskColor: texture_2d<f32>;
-@group(2) @binding(1) maskSampler: sampler;
+struct VertexShaderOutput {
+    @location(0) tex_coords: vec2<f32>,
+    @location(1) mask_coords: vec2<f32>,
+    @location(2) color: vec4<f32>,
+    @builtin(position) position: vec4<f32>,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(1) @binding(0) var texColor: texture_2d<f32>;
+@group(1) @binding(1) var texSampler: sampler;
+@group(2) @binding(0) var maskColor: texture_2d<f32>;
+@group(2) @binding(1) var maskSampler: sampler;
+
+fn unpack_color(color: u32) -> vec4<f32> {
+    return vec4<f32>(
+        f32(color & 255u),
+        f32((color >> 8u) & 255u),
+        f32((color >> 16u) & 255u),
+        f32((color >> 24u) & 255u),
+    ) / 255.0;
+}
+
+fn unpack_position(posn: vec2<f32>) -> vec4<f32> {
+    return vec4<f32>(
+        (2.0 * posn.x / uniforms.viewport_size.x) - 1.0,
+        1.0 - (2.0 * posn.y / uniforms.viewport_size.y),
+        0.0,
+        1.0,
+    );
+}
+
+@vertex
+fn vertex_main(
+    @location(0) position: vec2<f32>,
+    @location(1) tex_coords: vec2<f32>,
+    @location(2) color: u32
+) -> VertexShaderOutput {
+    var out: VertexShaderOutput;
+
+    // Transform the vertex position.
+    var pos: vec3<f32> = uniforms.transform * vec3<f32>(position, 1.0);
+    pos = pos / pos.z;
+
+    out.position = unpack_position(pos.xy);
+    out.tex_coords = tex_coords;
+    out.mask_coords = vec2<f32>(
+        tex_coords.x / uniforms.viewport_size.x,
+        tex_coords.y / uniforms.viewport_size.y,
+    );
+    out.color = unpack_color(color);
+
+    return out;
+}
+
+@fragment
+fn fragment_main(in: VertexShaderOutput) -> @location(0) vec4<f32> {
+    let tex_color = textureSample(texColor, texSampler, in.tex_coords);
+    let mask_color = textureSample(maskColor, maskSampler, in.mask_coords);
+
+    let main_color = in.color * tex_color;
+    return main_color * mask_color;
+}
+
