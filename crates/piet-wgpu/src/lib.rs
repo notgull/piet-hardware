@@ -75,9 +75,6 @@ struct GpuContext<DaQ: ?Sized> {
     /// Bind group for textures.
     texture_bind_group: wgpu::BindGroupLayout,
 
-    /// The color to use to clear the screen.
-    clear_color: Cell<Option<Color>>,
-
     /// Unique ID.
     id: Cell<usize>,
 
@@ -85,7 +82,10 @@ struct GpuContext<DaQ: ?Sized> {
     device_and_queue: DaQ,
 }
 
-struct CurrentRenderState {}
+struct CurrentRenderState {
+    /// The clear-color in use.
+    clear_color: Option<Color>,
+}
 
 struct WgpuTexture {
     /// The sampler to use for texturing.
@@ -294,7 +294,6 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
             uniform_buffer,
             uniform_bind_group,
             texture_bind_group: texture_buffer_layout,
-            clear_color: Cell::new(None),
             id: Cell::new(0),
         }
     }
@@ -475,7 +474,8 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
     }
 
     fn max_texture_size(&self) -> (u32, u32) {
-        todo!()
+        let max_size = self.device_and_queue.device().limits().max_texture_dimension_2d;
+        (max_size, max_size)
     }
 
     fn create_vertex_buffer(&self) -> Result<Self::VertexBuffer, Self::Error> {
