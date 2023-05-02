@@ -501,8 +501,13 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
                         // Get the rectangle in screen space representing the glyph.
                         let pos_rect = Rect::from_origin_size(
                             (
-                                glyph.x_int as f64 + pos.x + offset.x,
-                                glyph.y_int as f64 + line_y + pos.y + offset.y,
+                                glyph.x_int as f64
+                                    + pos.x
+                                    + offset.x,
+                                glyph.y_int as f64
+                                    + line_y
+                                    + pos.y
+                                    + offset.y,
                             ),
                             size,
                         );
@@ -512,7 +517,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
                                 let [r, g, b, a] = [color.r(), color.g(), color.b(), color.a()];
                                 piet::Color::rgba8(r, g, b, a)
                             }
-                            None => piet::Color::WHITE,
+                            None => piet::util::DEFAULT_TEXT_COLOR
                         };
 
                         Some(TessRect {

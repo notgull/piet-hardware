@@ -155,7 +155,7 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                 })?;
 
                 let bounds = outline.px_bounds();
-                let (width, height) = (bounds.width() as i32, bounds.height() as i32);
+                let (width, height) = (bounds.width().ceil() as i32, bounds.height().ceil() as i32);
                 let mut buffer = vec![0u32; (width * height) as usize];
 
                 // Draw the glyph.

@@ -47,9 +47,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
 }
 
-const TEXT: &str = "the quick fox jumps over the lazy dog
+const TEXT: &str = "the quick brown fox jumps over the lazy dog
 1234567890~-=+{};:'<>?
-ThE QuicK fox Jumps Over The laZy d0g
+ThE QuicK brown fox Jumps Over The laZy d0g
 قبل هو أمدها مشارف ارتكبها, فصل لم زهاء التقليدي. الى ثم ديسمبر 
 経だルぴぞ月職カオ宣清こぼトそ積7旬タウ社改オ案処がやく途国地
 ❤️💀🔥😊";
