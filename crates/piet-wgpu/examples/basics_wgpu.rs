@@ -24,6 +24,7 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::WindowBuilder;
 
+use piet_hardware::piet::kurbo::{Point, BezPath, Affine};
 use piet_hardware::piet::{self, RenderContext as _};
 use piet_wgpu::{RenderContext, WgpuContext};
 
@@ -35,8 +36,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dx12_shader_compiler: Default::default(),
     });
 
-    let draw = |rc: &mut RenderContext<'_, _>| {
-        rc.clear(None, piet::Color::RED);
+    // A path representing a star.
+    let star = generate_five_pointed_star(Point::new(0.0, 0.0), 75.0, 150.0);
+    let mut tick = 0;
+
+    // Drawing function.
+    let mut solid_red = None;
+    let mut outline = None;
+    let mut draw = move |rc: &mut RenderContext<'_, _>| {
+        rc.clear(None, piet::Color::rgb8(0x87, 0xce, 0xeb));
+    
+        let red_star = {
+            let rot = (tick % 360) as f64 / 180.0 * std::f64::consts::PI;
+            let transform = Affine::translate((200.0, 200.0)) * Affine::rotate(rot);
+            transform * (&star)
+        };
+
+        // Draw a solid red using the path.
+        let solid_red =
+            solid_red.get_or_insert_with(|| rc.solid_brush(piet::Color::OLIVE));
+        rc.fill(&red_star, solid_red);
+
+        // Draw a black outline using the path.
+        let outline = outline.get_or_insert_with(|| rc.solid_brush(piet::Color::BLACK));
+        rc.stroke(&red_star, outline, 5.0);
+
+        // Draw a solid red star with a black outline.
+        tick += 1;
         rc.finish().unwrap();
     };
 
@@ -48,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         width: 0,
         height: 0,
         present_mode: wgpu::PresentMode::AutoVsync,
-        alpha_mode: wgpu::CompositeAlphaMode::Inherit,
+        alpha_mode: wgpu::CompositeAlphaMode::Opaque,
         view_formats: vec![format],
     };
     let mut window_size = (0, 0);
@@ -141,3 +167,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     })
 }
+
+
+fn generate_five_pointed_star(center: Point, inner_radius: f64, outer_radius: f64) -> BezPath {
+    let point_from_polar = |radius: f64, angle: f64| {
+        let x = center.x + radius * angle.cos();
+        let y = center.y + radius * angle.sin();
+        Point::new(x, y)
+    };
+
+    let one_fifth_circle = std::f64::consts::PI * 2.0 / 5.0;
+
+    let outer_points = (0..5).map(|i| point_from_polar(outer_radius, one_fifth_circle * i as f64));
+    let inner_points = (0..5).map(|i| {
+        point_from_polar(
+            inner_radius,
+            one_fifth_circle * i as f64 + one_fifth_circle / 2.0,
+        )
+    });
+    let mut points = outer_points.zip(inner_points).flat_map(|(a, b)| [a, b]);
+
+    // Set up the path.
+    let mut path = BezPath::new();
+    path.move_to(points.next().unwrap());
+
+    // Add the points to the path.
+    for point in points {
+        path.line_to(point);
+    }
+
+    // Close the path.
+    path.close_path();
+    path
+}
+
