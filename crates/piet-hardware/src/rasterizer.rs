@@ -241,7 +241,7 @@ fn shape_to_lyon_path(shape: &impl Shape, tolerance: f64) -> impl Iterator<Item 
             let close = |this: &mut PathConverter<I>, close| {
                 if let (Some(first), Some(last)) = (this.first.take(), this.last.take()) {
                     if (!approx_eq(first.x, last.x) || !approx_eq(first.y, last.y))
-                        && (this.needs_close || close)
+                        || (this.needs_close || close)
                     {
                         this.needs_close = false;
                         return Some(Event::End {
