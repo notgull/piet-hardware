@@ -481,15 +481,11 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
                 let atlas = restore.atlas.as_mut().unwrap();
                 |(glyph, line_y)| {
                     // Get the rectangle in texture space representing the glyph.
-                    let font_data = text.with_font_system_mut(|fs| {
-                        fs.get_font(glyph.cache_key.font_id)
-                            .expect("font not found")
-                    });
                     let GlyphData {
                         uv_rect,
                         offset,
                         size,
-                    } = match atlas.uv_rect(glyph, &font_data) {
+                    } = match text.with_font_system_mut(|fs| atlas.uv_rect(glyph, fs)) {
                         Ok(rect) => rect,
                         Err(e) => {
                             tracing::trace!("failed to get uv rect: {}", e);
@@ -501,7 +497,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
                     let pos_rect = Rect::from_origin_size(
                         (
                             glyph.x_int as f64 + pos.x + offset.x,
-                            glyph.y_int as f64 + line_y + pos.y + offset.y,
+                            glyph.y_int as f64 + line_y + pos.y - offset.y,
                         ),
                         size,
                     );
