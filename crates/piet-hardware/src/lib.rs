@@ -65,9 +65,7 @@ mod resources;
 mod text;
 
 pub use self::brush::Brush;
-pub use self::gpu_backend::{
-    BufferType, GpuContext, RepeatStrategy, TextureType, Vertex, VertexFormat,
-};
+pub use self::gpu_backend::{BufferType, GpuContext, RepeatStrategy, Vertex, VertexFormat};
 pub use self::image::Image;
 pub use self::text::{Text, TextLayout, TextLayoutBuilder};
 
@@ -88,9 +86,6 @@ pub struct Source<C: GpuContext + ?Sized> {
     /// This is used for solid-color fills. It is also used as the mask for when a
     /// clipping mask is not defined.
     white_pixel: Texture<C>,
-
-    /// `white_pixel`, but as a mask instead.
-    white_pixel_mask: Texture<C>,
 
     /// The buffers used by the GPU renderer.
     buffers: Buffers<C>,
@@ -121,7 +116,7 @@ struct Buffers<C: GpuContext + ?Sized> {
 impl<C: GpuContext + ?Sized> Source<C> {
     /// Create a new source from a context wrapped in an `Rc`.
     pub fn from_rc(context: Rc<C>) -> Result<Self, Pierror> {
-        let make_white_pixel = |ty| {
+        let make_white_pixel = || {
             const WHITE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
 
             // Setup a white pixel texture.
@@ -129,7 +124,6 @@ impl<C: GpuContext + ?Sized> Source<C> {
                 &context,
                 InterpolationMode::NearestNeighbor,
                 RepeatStrategy::Repeat,
-                ty,
             )
             .piet_err()?;
 
@@ -139,8 +133,7 @@ impl<C: GpuContext + ?Sized> Source<C> {
         };
 
         Ok(Self {
-            white_pixel: make_white_pixel(TextureType::Input)?,
-            white_pixel_mask: make_white_pixel(TextureType::Mask)?,
+            white_pixel: make_white_pixel()?,
             buffers: {
                 let vbo = VertexBuffer::new(&context).piet_err()?;
 
@@ -569,7 +562,6 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
             &self.source.context,
             InterpolationMode::Bilinear,
             RepeatStrategy::Color(piet::Color::TRANSPARENT),
-            TextureType::Input,
         )
         .piet_err()?;
 

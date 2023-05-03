@@ -610,7 +610,6 @@ impl piet_hardware::GpuContext for GlContext {
         &self,
         interpolation: piet::InterpolationMode,
         repeat: piet_hardware::RepeatStrategy,
-        _: piet_hardware::TextureType,
     ) -> Result<Self::Texture, Self::Error> {
         self.assert_context();
 

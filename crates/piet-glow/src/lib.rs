@@ -162,7 +162,6 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
         &self,
         interpolation: piet_hardware::piet::InterpolationMode,
         repeat: piet_hardware::RepeatStrategy,
-        _: piet_hardware::TextureType,
     ) -> Result<Self::Texture, Self::Error> {
         unsafe {
             let texture = self.context.create_texture().gl_err()?;

@@ -33,7 +33,7 @@ use std::rc::Rc;
 
 use piet_hardware::piet::kurbo::Affine;
 use piet_hardware::piet::{self, Color, Error as Pierror, ImageFormat, InterpolationMode};
-use piet_hardware::{RepeatStrategy, TextureType, Vertex};
+use piet_hardware::{RepeatStrategy, Vertex};
 
 use slab::Slab;
 use wgpu::util::DeviceExt;
@@ -561,7 +561,6 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         &self,
         interpolation: InterpolationMode,
         repeat: piet_hardware::RepeatStrategy,
-        _ty: TextureType,
     ) -> Result<Self::Texture, Self::Error> {
         let id = self.texture_bind_groups.borrow_mut().insert(None);
         let filter_mode = match interpolation {

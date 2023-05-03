@@ -50,7 +50,6 @@ pub trait GpuContext {
         &self,
         interpolation: InterpolationMode,
         repeat: RepeatStrategy,
-        ty: TextureType,
     ) -> Result<Self::Texture, Self::Error>;
 
     /// Delete a texture.
@@ -108,16 +107,6 @@ pub trait GpuContext {
         transform: &Affine,
         size: (u32, u32),
     ) -> Result<(), Self::Error>;
-}
-
-/// The type of texture we are creating.
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub enum TextureType {
-    /// This texture is used as the input image.
-    Input,
-
-    /// This texture is used as the mask image.
-    Mask,
 }
 
 /// The strategy to use for repeating.

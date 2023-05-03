@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dx12_shader_compiler: Default::default(),
     });
 
-    let mut draw = |rc: &mut RenderContext<'_, _>| {
+    let draw = |rc: &mut RenderContext<'_, _>| {
         rc.clear(None, piet::Color::RED);
         rc.finish().unwrap();
     };
@@ -114,7 +114,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             _ => {}
         }
-    });
-
-    Ok(())
+    })
 }

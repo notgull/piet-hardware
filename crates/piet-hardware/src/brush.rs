@@ -21,7 +21,7 @@
 
 //! The brush types used by `piet-hardware`.
 
-use super::gpu_backend::{GpuContext, RepeatStrategy, TextureType, Vertex};
+use super::gpu_backend::{GpuContext, RepeatStrategy, Vertex};
 use super::image::Image;
 use super::resources::Texture;
 use super::{RenderContext, ResultExt, UV_WHITE};
@@ -80,7 +80,6 @@ impl<C: GpuContext + ?Sized> Brush<C> {
             context,
             piet::InterpolationMode::Bilinear,
             RepeatStrategy::Clamp,
-            TextureType::Input,
         )
         .piet_err()?;
 
@@ -100,7 +99,6 @@ impl<C: GpuContext + ?Sized> Brush<C> {
             context,
             piet::InterpolationMode::Bilinear,
             RepeatStrategy::Clamp,
-            TextureType::Input,
         )
         .piet_err()?;
 

@@ -21,7 +21,7 @@
 
 //! Defines useful resource wrappers.
 
-use super::gpu_backend::{GpuContext, RepeatStrategy, TextureType, Vertex};
+use super::gpu_backend::{GpuContext, RepeatStrategy, Vertex};
 
 use piet::kurbo::{Size, Vec2};
 use piet::{
@@ -76,9 +76,8 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         context: &Rc<C>,
         interpolation: InterpolationMode,
         repeat: RepeatStrategy,
-        ty: TextureType,
     ) -> Result<Self, C::Error> {
-        let resource = context.create_texture(interpolation, repeat, ty)?;
+        let resource = context.create_texture(interpolation, repeat)?;
 
         Ok(Self::from_raw(context, resource))
     }
