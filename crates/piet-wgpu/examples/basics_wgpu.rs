@@ -24,11 +24,12 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::WindowBuilder;
 
-use piet_hardware::piet::kurbo::{Point, BezPath, Affine};
+use piet_hardware::piet::kurbo::{Affine, BezPath, Point};
 use piet_hardware::piet::{self, RenderContext as _};
 use piet_wgpu::{RenderContext, WgpuContext};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt::init();
     let event_loop = EventLoop::new();
 
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -42,10 +43,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Drawing function.
     let mut solid_red = None;
-    let mut outline = None;
+    //let mut outline = None;
     let mut draw = move |rc: &mut RenderContext<'_, _>| {
         rc.clear(None, piet::Color::rgb8(0x87, 0xce, 0xeb));
-    
+
         let red_star = {
             let rot = (tick % 360) as f64 / 180.0 * std::f64::consts::PI;
             let transform = Affine::translate((200.0, 200.0)) * Affine::rotate(rot);
@@ -53,13 +54,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         // Draw a solid red using the path.
-        let solid_red =
-            solid_red.get_or_insert_with(|| rc.solid_brush(piet::Color::OLIVE));
+        let solid_red = solid_red.get_or_insert_with(|| rc.solid_brush(piet::Color::OLIVE));
         rc.fill(&red_star, solid_red);
 
         // Draw a black outline using the path.
-        let outline = outline.get_or_insert_with(|| rc.solid_brush(piet::Color::BLACK));
-        rc.stroke(&red_star, outline, 5.0);
+        //let outline = outline.get_or_insert_with(|| rc.solid_brush(piet::Color::BLACK));
+        //rc.stroke(&red_star, outline, 5.0);
 
         // Draw a solid red star with a black outline.
         tick += 1;
@@ -168,7 +168,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
 }
 
-
 fn generate_five_pointed_star(center: Point, inner_radius: f64, outer_radius: f64) -> BezPath {
     let point_from_polar = |radius: f64, angle: f64| {
         let x = center.x + radius * angle.cos();
@@ -200,4 +199,3 @@ fn generate_five_pointed_star(center: Point, inner_radius: f64, outer_radius: f6
     path.close_path();
     path
 }
-

@@ -35,7 +35,6 @@ use piet_hardware::piet::kurbo::Affine;
 use piet_hardware::piet::{self, Color, Error as Pierror, ImageFormat, InterpolationMode};
 use piet_hardware::{RepeatStrategy, Vertex};
 
-use slab::Slab;
 use wgpu::util::DeviceExt;
 
 const SHADER_SOURCE: &str = include_str!("piet.wgsl");
@@ -83,42 +82,14 @@ struct GpuContext<DaQ: ?Sized> {
     /// The clearing color.
     clear_color: Cell<Option<Color>>,
 
-    /// The bind groups for textures.
-    ///
-    /// They are stored here to simplify borrowing.
-    texture_bind_groups: RefCell<Slab<Option<wgpu::BindGroup>>>,
-
-    /// The buffers for WGPU.
-    ///
-    /// They are stored here to simplify borrowing.
-    buffers: RefCell<Slab<wgpu::Buffer>>,
-
-    /// The list of buffers to push.
-    buffer_pushes: RefCell<Vec<BufferPush>>,
+    /// Encoder for the render passes.
+    encoder: RefCell<wgpu::CommandEncoder>,
 
     /// The view of the texture.
     texture_view: RefCell<Option<wgpu::TextureView>>,
 
     /// The `wgpu` device and queue.
     device_and_queue: DaQ,
-}
-
-/// Represents a `push_buffers` call that we are waiting to render.
-struct BufferPush {
-    /// The buffer to push.
-    buffer: Rc<BufferInner>,
-
-    /// The texture used as the base color.
-    base_color: Rc<RefCell<TextureInner>>,
-
-    /// The texture used as the mask.
-    mask: Rc<RefCell<TextureInner>>,
-
-    /// The transform to apply.
-    transform: Affine,
-
-    /// The viewport size.
-    viewport_size: [u32; 2],
 }
 
 /// The resource representing a WGPU texture.
@@ -146,6 +117,9 @@ struct TextureInner {
 
     /// The border color.
     border_color: Option<wgpu::SamplerBorderColor>,
+
+    /// The bind group to use to bind to the pipeline.
+    bind_group: Option<wgpu::BindGroup>,
 }
 
 impl TextureInner {
@@ -154,7 +128,7 @@ impl TextureInner {
         let texture = match self.texture.as_ref() {
             Some(texture) => texture,
             None => {
-                base.texture_bind_groups.borrow_mut()[self.id] = None;
+                self.bind_group = None;
                 return;
             }
         };
@@ -179,7 +153,7 @@ impl TextureInner {
                     ],
                 });
 
-        base.texture_bind_groups.borrow_mut()[self.id] = Some(new_bind_group);
+        self.bind_group = Some(new_bind_group);
     }
 }
 
@@ -211,14 +185,12 @@ struct Buffer {
 
     /// The identifier for the buffer.
     buffer_id: &'static str,
+
+    /// The inner WGPU buffer.
+    buffer: Option<wgpu::Buffer>,
 }
 
 impl Buffer {
-    /// Remove this buffer from the GPU.
-    fn remove<DaQ: DeviceAndQueue + ?Sized>(&mut self, base: &GpuContext<DaQ>) {
-        base.buffers.borrow_mut().try_remove(self.id);
-    }
-
     /// Update the buffer to hold this size.
     fn update_for_size<DaQ: DeviceAndQueue + ?Sized>(
         &mut self,
@@ -226,24 +198,20 @@ impl Buffer {
         new_size: usize,
     ) {
         if new_size > self.capacity {
-            self.remove(base);
-            let new_id = base.buffers.borrow().vacant_key();
-
             // Create a new buffer.
             let buffer = base
                 .device_and_queue
                 .device()
                 .create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(&format!("piet-wgpu {} buffer {new_id}", self.buffer_id)),
+                    label: Some(&format!("piet-wgpu {} buffer {}", self.buffer_id, self.id)),
                     usage: self.usage,
                     size: new_size.try_into().expect("buffer too large"),
                     mapped_at_creation: false,
                 });
 
             // Insert it into the list of buffers.
-            base.buffers.borrow_mut().insert(buffer);
+            self.buffer = Some(buffer);
 
-            self.id = new_id;
             self.capacity = new_size;
             self.len = 0;
         }
@@ -257,11 +225,12 @@ impl Buffer {
         buffer_id: &'static str,
     ) -> Self {
         let mut this = Self {
-            id: base.buffers.borrow().vacant_key(),
+            id: 0x1337,
             capacity: 0,
             buffer_id,
             usage,
             len: 0,
+            buffer: None,
         };
 
         this.update_for_size(base, size);
@@ -447,6 +416,10 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
             multiview: None,
         });
 
+        let encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("piet-wgpu command encoder"),
+        });
+
         Self {
             device_and_queue,
             pipeline,
@@ -454,10 +427,8 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
             uniform_bind_group,
             texture_bind_layout: texture_buffer_layout,
             clear_color: Cell::new(None),
-            buffer_pushes: RefCell::new(Vec::new()),
             texture_view: RefCell::new(None),
-            texture_bind_groups: RefCell::new(Slab::new()),
-            buffers: RefCell::new(Slab::new()),
+            encoder: RefCell::new(encoder),
         }
     }
 }
@@ -473,96 +444,16 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
     }
 
     fn flush(&self) -> Result<(), Self::Error> {
-        let texture_view = self.texture_view.borrow();
-        let pushes = self.buffer_pushes.borrow();
-        let bind_groups = self.texture_bind_groups.borrow();
-        let buffers = self.buffers.borrow();
-
-        // Create a command encoder and a render pass.
-        let mut encoder = self.device_and_queue.device().create_command_encoder(
-            &wgpu::CommandEncoderDescriptor {
-                label: Some("piet-wgpu command encoder"),
-            },
-        );
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("piet-wgpu render pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: texture_view.as_ref().expect("no texture view"),
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: match self.clear_color.take() {
-                        None => wgpu::LoadOp::Load,
-                        Some(clr) => wgpu::LoadOp::Clear({
-                            let (r, g, b, a) = clr.as_rgba();
-                            wgpu::Color { r, g, b, a }
-                        }),
-                    },
-                    store: true,
+        let encoder = {
+            let dummy_encoder = self.device_and_queue.device().create_command_encoder(
+                &wgpu::CommandEncoderDescriptor {
+                    label: Some("piet-wgpu command encoder"),
                 },
-            })],
-            depth_stencil_attachment: None,
-        });
-
-        pass.set_pipeline(&self.pipeline);
-
-        // Push any buffers that we need to push.
-        for BufferPush {
-            buffer,
-            base_color,
-            mask,
-            transform,
-            viewport_size,
-        } in pushes.iter()
-        {
-            let base_color = base_color.borrow();
-            let mask = mask.borrow();
-
-            pass.set_viewport(
-                0.0,
-                0.0,
-                viewport_size[0] as f32,
-                viewport_size[1] as f32,
-                0.0,
-                1.0,
             );
+            mem::replace(&mut *self.encoder.borrow_mut(), dummy_encoder)
+        };
 
-            // Set up the uniforms.
-            let uniforms = Uniforms {
-                transform: affine_to_column_major(transform),
-                viewport_size: [viewport_size[0] as f32, viewport_size[1] as f32],
-            };
-            self.device_and_queue.queue().write_buffer(
-                &self.uniform_buffer,
-                0,
-                bytemuck::cast_slice(&[uniforms]),
-            );
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-
-            // Bind textures.
-            pass.set_bind_group(1, bind_groups[base_color.id].as_ref().unwrap(), &[]);
-            pass.set_bind_group(2, bind_groups[mask.id].as_ref().unwrap(), &[]);
-
-            let vertex_buffer = &buffers[buffer.vertex_buffer.borrow().id];
-            let index_buffer = &buffers[buffer.index_buffer.borrow().id];
-
-            pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-            pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-
-            // Draw the triangles.
-            pass.draw_indexed(
-                0..buffer
-                    .index_buffer
-                    .borrow()
-                    .len
-                    .try_into()
-                    .expect("too many indices"),
-                0,
-                0..1,
-            );
-        }
-
-        // Finish the buffer and submit it.
-        drop(pass);
+        // Encode to a buffer and push to the queue.
         self.device_and_queue.queue().submit(Some(encoder.finish()));
 
         Ok(())
@@ -573,7 +464,6 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         interpolation: InterpolationMode,
         repeat: piet_hardware::RepeatStrategy,
     ) -> Result<Self::Texture, Self::Error> {
-        let id = self.texture_bind_groups.borrow_mut().insert(None);
         let filter_mode = match interpolation {
             InterpolationMode::Bilinear => wgpu::FilterMode::Linear,
             InterpolationMode::NearestNeighbor => wgpu::FilterMode::Nearest,
@@ -606,7 +496,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
             .device_and_queue
             .device()
             .create_sampler(&wgpu::SamplerDescriptor {
-                label: Some(&format!("piet-wgpu sampler {}", id)),
+                label: Some("piet-wgpu sampler"),
                 compare: None,
                 mag_filter: filter_mode,
                 min_filter: filter_mode,
@@ -617,24 +507,19 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
             });
 
         Ok(WgpuTexture(Rc::new(RefCell::new(TextureInner {
-            id,
+            id: 0x1337,
             texture: None,
             format: ImageFormat::Grayscale,
             sampler,
             interpolation,
             border_color,
             address_mode,
+            bind_group: None,
         }))))
     }
 
     fn delete_texture(&self, texture: Self::Texture) {
-        // Release the bind group.
-        let mut bind_groups = self.texture_bind_groups.borrow_mut();
-        let guard = texture.0.borrow_mut();
-        bind_groups.remove(guard.id);
-
         // Drop the texture.
-        drop(guard);
         drop(texture);
     }
 
@@ -815,15 +700,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
     }
 
     fn delete_vertex_buffer(&self, buffer: Self::VertexBuffer) {
-        let mut vb = buffer.0.vertex_buffer.borrow_mut();
-        let mut ib = buffer.0.index_buffer.borrow_mut();
-
-        // Drop the buffers.
-        vb.remove(self);
-        ib.remove(self);
-
         // Drop the buffer.
-        drop((vb, ib));
         drop(buffer);
     }
 
@@ -833,6 +710,8 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         vertices: &[piet_hardware::Vertex],
         indices: &[u32],
     ) {
+        std::println!("vertices: {vertices:?}\nindices: {indices:?}");
+
         let mut vb = buffer.0.vertex_buffer.borrow_mut();
         let mut ib = buffer.0.index_buffer.borrow_mut();
 
@@ -847,9 +726,8 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         ib.update_for_size(self, required_ib_size);
 
         // Write the vertices.
-        let buffers = self.buffers.borrow();
         self.device_and_queue.queue().write_buffer(
-            &buffers[vb.id],
+            vb.buffer.as_ref().unwrap(),
             0,
             bytemuck::cast_slice(vertices),
         );
@@ -857,9 +735,9 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
 
         // Write the indices.
         self.device_and_queue.queue().write_buffer(
-            &buffers[ib.id],
+            ib.buffer.as_ref().unwrap(),
             0,
-            bytemuck::cast_slice(indices),
+            bytemuck::cast_slice::<u32, u8>(indices),
         );
         ib.len = indices.len();
     }
@@ -870,16 +748,76 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         current_texture: &Self::Texture,
         mask_texture: &Self::Texture,
         transform: &Affine,
-        size: (u32, u32),
+        (viewport_width, viewport_height): (u32, u32),
     ) -> Result<(), Self::Error> {
-        // Queue a buffer push for the next flush.
-        self.buffer_pushes.borrow_mut().push(BufferPush {
-            buffer: vertex_buffer.0.clone(),
-            base_color: current_texture.0.clone(),
-            mask: mask_texture.0.clone(),
-            transform: *transform,
-            viewport_size: [size.0, size.1],
+        let texture_view = self.texture_view.borrow();
+        let current_texture = current_texture.0.borrow();
+        let mask_texture = mask_texture.0.borrow();
+        let vb = vertex_buffer.0.vertex_buffer.borrow();
+        let ib = vertex_buffer.0.index_buffer.borrow();
+
+        println!("vertices: {}, indices: {}", vb.len, ib.len);
+
+        // Create a command encoder and a render pass.
+        let mut encoder = self.encoder.borrow_mut();
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("piet-wgpu render pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: texture_view.as_ref().expect("no texture view"),
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: match self.clear_color.take() {
+                        None => wgpu::LoadOp::Load,
+                        Some(clr) => wgpu::LoadOp::Clear({
+                            let (r, g, b, a) = clr.as_rgba();
+                            wgpu::Color { r, g, b, a }
+                        }),
+                    },
+                    store: true,
+                },
+            })],
+            depth_stencil_attachment: None,
         });
+
+        pass.set_pipeline(&self.pipeline);
+
+        // Push any buffers that we need to push.
+        pass.set_viewport(
+            0.0,
+            0.0,
+            viewport_width as f32,
+            viewport_height as f32,
+            0.0,
+            1.0,
+        );
+
+        // Set up the uniforms.
+        let uniforms = Uniforms {
+            transform: affine_to_column_major(transform),
+            viewport_size: [viewport_width as f32, viewport_height as f32],
+        };
+        self.device_and_queue.queue().write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[uniforms]),
+        );
+        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+
+        // Bind textures.
+        pass.set_bind_group(1, current_texture.bind_group.as_ref().unwrap(), &[]);
+        pass.set_bind_group(2, mask_texture.bind_group.as_ref().unwrap(), &[]);
+
+        // Get counts.
+        let num_vertices: u64 = vb.len.try_into().expect("too many vertices");
+        let num_indices: u32 = ib.len.try_into().expect("too many indices");
+        pass.set_vertex_buffer(0, vb.buffer.as_ref().unwrap().slice(..num_vertices));
+        pass.set_index_buffer(
+            ib.buffer.as_ref().unwrap().slice(..num_indices as u64 * 4),
+            wgpu::IndexFormat::Uint32,
+        );
+
+        // Draw the triangles.
+        pass.draw_indexed(0..num_indices, 0, 0..1);
 
         Ok(())
     }
