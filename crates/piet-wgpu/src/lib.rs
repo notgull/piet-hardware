@@ -24,6 +24,7 @@
 //! [`piet`]: https://crates.io/crates/piet
 //! [`wgpu`]: https://crates.io/crates/wgpu
 
+use std::borrow;
 use std::cell::{Cell, RefCell};
 use std::convert::Infallible;
 use std::mem;
@@ -55,13 +56,13 @@ pub trait DeviceAndQueue {
     fn queue(&self) -> &wgpu::Queue;
 }
 
-impl<A: AsRef<wgpu::Device>, B: AsRef<wgpu::Queue>> DeviceAndQueue for (A, B) {
+impl<A: borrow::Borrow<wgpu::Device>, B: borrow::Borrow<wgpu::Queue>> DeviceAndQueue for (A, B) {
     fn device(&self) -> &wgpu::Device {
-        self.0.as_ref()
+        borrow::Borrow::borrow(&self.0)
     }
 
     fn queue(&self) -> &wgpu::Queue {
-        self.1.as_ref()
+        borrow::Borrow::borrow(&self.1)
     }
 }
 
@@ -905,7 +906,18 @@ impl<D: DeviceAndQueue + ?Sized> WgpuContext<D> {
     }
 
     /// Get the render context.
-    pub fn render_context(&mut self, width: u32, height: u32) -> RenderContext<'_, D> {
+    pub fn render_context(
+        &mut self,
+        view: wgpu::TextureView,
+        width: u32,
+        height: u32,
+    ) -> RenderContext<'_, D> {
+        self.source
+            .context()
+            .texture_view
+            .borrow_mut()
+            .replace(view);
+
         RenderContext {
             text: &mut self.text,
             context: self.source.render_context(width, height),
