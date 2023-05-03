@@ -26,7 +26,7 @@ use super::resources::Texture;
 use super::ResultExt;
 
 use ahash::RandomState;
-use cosmic_text::{CacheKey, LayoutGlyph};
+use cosmic_text::{CacheKey, FontSystem, LayoutGlyph, Placement, SwashCache, SwashContent};
 use etagere::{Allocation, AtlasAllocator};
 use hashbrown::hash_map::{Entry, HashMap};
 
@@ -48,6 +48,9 @@ pub(crate) struct Atlas<C: GpuContext + ?Sized> {
 
     /// The hash map between the glyphs used and the texture allocation.
     glyphs: HashMap<CacheKey, Position, RandomState>,
+
+    /// The cache for the swash layout.
+    swash_cache: SwashCache,
 }
 
 /// The data needed for rendering a glyph.
@@ -67,8 +70,8 @@ struct Position {
     /// The allocation of the glyph in the atlas.
     allocation: Allocation,
 
-    /// The rectangle of the glyph relative to the position.
-    rect: Rect,
+    /// Placement of the glyph.
+    placement: Placement,
 }
 
 impl<C: GpuContext + ?Sized> Atlas<C> {
@@ -90,6 +93,7 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
             size: (max_width, max_height),
             allocator: AtlasAllocator::new([max_width as i32, max_height as i32].into()),
             glyphs: HashMap::with_hasher(RandomState::new()),
+            swash_cache: SwashCache::new(),
         })
     }
 
@@ -104,15 +108,15 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
     pub(crate) fn uv_rect(
         &mut self,
         glyph: &LayoutGlyph,
-        font_data: &cosmic_text::Font,
+        font_system: &mut FontSystem,
     ) -> Result<GlyphData, Pierror> {
         let alloc_to_rect = {
             let (width, height) = self.size;
             move |posn: &Position| {
                 let alloc = &posn.allocation;
 
-                let max_x = alloc.rectangle.min.x + posn.rect.width() as i32;
-                let max_y = alloc.rectangle.min.y + posn.rect.height() as i32;
+                let max_x = alloc.rectangle.min.x + posn.placement.width as i32;
+                let max_y = alloc.rectangle.min.y + posn.placement.height as i32;
 
                 let uv_rect = Rect::new(
                     alloc.rectangle.min.x as f64 / width as f64,
@@ -120,13 +124,13 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                     max_x as f64 / width as f64,
                     max_y as f64 / height as f64,
                 );
-                let offset = posn.rect.origin();
-                let size = posn.rect.size();
+                let offset = (posn.placement.left as f64, posn.placement.top as f64);
+                let size = (posn.placement.width as f64, posn.placement.height as f64);
 
                 GlyphData {
                     uv_rect,
-                    size,
-                    offset,
+                    size: size.into(),
+                    offset: offset.into(),
                 }
             }
         };
@@ -140,49 +144,53 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
             }
 
             Entry::Vacant(v) => {
-                use ab_glyph::Font as _;
+                // Get the swash image.
+                let sw_image = self
+                    .swash_cache
+                    .get_image_uncached(font_system, glyph.cache_key)
+                    .ok_or_else(|| {
+                        Pierror::BackendError({
+                            format!("Failed to outline glyph {}", glyph.cache_key.glyph_id).into()
+                        })
+                    })?;
 
-                // Q: Why are we using ab_glyph instead of swash, which cosmic-text uses?
-                // A: ab_glyph already exists in the winit dep tree, which this crate is intended
-                //    to be used with.
-                let font_ref = ab_glyph::FontRef::try_from_slice(font_data.data()).piet_err()?;
-                let glyph_id = ab_glyph::GlyphId(glyph.cache_key.glyph_id)
-                    .with_scale(f32::from_bits(glyph.cache_key.font_size_bits));
-                let outline = font_ref.outline_glyph(glyph_id).ok_or_else(|| {
-                    Pierror::BackendError({
-                        format!("Failed to outline glyph {}", glyph.cache_key.glyph_id).into()
-                    })
-                })?;
+                // Render it to a buffer.
+                let mut buffer = vec![
+                    0u32;
+                    sw_image.placement.width as usize
+                        * sw_image.placement.height as usize
+                ];
+                match sw_image.content {
+                    SwashContent::Color => {
+                        // Copy the color to the buffer.
+                        buffer
+                            .iter_mut()
+                            .zip(sw_image.data.chunks(4))
+                            .for_each(|(buf, input)| {
+                                let color =
+                                    u32::from_ne_bytes([input[0], input[1], input[2], input[3]]);
+                                *buf = color;
+                            });
+                    }
+                    SwashContent::Mask => {
+                        // Copy the mask to the buffer.
+                        buffer
+                            .iter_mut()
+                            .zip(sw_image.data.iter())
+                            .for_each(|(buf, input)| {
+                                let color = u32::from_ne_bytes([255, 255, 255, *input]);
+                                *buf = color;
+                            });
+                    }
+                    _ => return Err(Pierror::NotSupported),
+                }
 
-                let bounds = outline.px_bounds();
-                let (width, height) = (bounds.width() as i32, bounds.height() as i32);
-                let mut buffer = vec![0u32; (width * height) as usize];
-
-                // Draw the glyph.
-                outline.draw(|x, y, c| {
-                    let pixel = {
-                        let pixel_offset = (x + y * width as u32) as usize;
-
-                        match buffer.get_mut(pixel_offset) {
-                            Some(pixel) => pixel,
-                            None => return,
-                        }
-                    };
-
-                    // Convert the color to a u32.
-                    let color = {
-                        let cbyte = (255.0 * c) as u8;
-                        u32::from_ne_bytes([cbyte, cbyte, cbyte, cbyte])
-                    };
-
-                    // Set the pixel.
-                    *pixel = color;
-                });
+                let (width, height) = (sw_image.placement.width, sw_image.placement.height);
 
                 // Find a place for it in the texture.
                 let alloc = self
                     .allocator
-                    .allocate([width, height].into())
+                    .allocate([width as i32, height as i32].into())
                     .ok_or_else(|| {
                         Pierror::BackendError("Failed to allocate glyph in texture atlas.".into())
                     })?;
@@ -190,7 +198,7 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                 // Insert the glyph into the texture.
                 self.texture.write_subtexture(
                     (alloc.rectangle.min.x as u32, alloc.rectangle.min.y as u32),
-                    (width as u32, height as u32),
+                    (width, height),
                     piet::ImageFormat::RgbaPremul,
                     bytemuck::cast_slice::<_, u8>(&buffer),
                 );
@@ -198,12 +206,7 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                 // Insert the allocation into the map.
                 let alloc = v.insert(Position {
                     allocation: alloc,
-                    rect: Rect::new(
-                        bounds.min.x as f64,
-                        bounds.min.y as f64,
-                        bounds.max.x as f64,
-                        bounds.max.y as f64,
-                    ),
+                    placement: sw_image.placement,
                 });
 
                 // Return the UV rectangle.
