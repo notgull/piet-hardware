@@ -278,6 +278,9 @@ struct Uniforms {
 
     /// Viewport size.
     viewport_size: [f32; 2],
+
+    /// Make the struct 64 bytes.
+    _padding: [u32; 4],
 }
 
 impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
@@ -304,6 +307,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
             contents: bytemuck::cast_slice(&[Uniforms {
                 transform: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
                 viewport_size: [0.0, 0.0],
+                _padding: [0; 4],
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -514,6 +518,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
             let uniforms = Uniforms {
                 transform: affine_to_column_major(transform),
                 viewport_size: [viewport_size[0] as f32, viewport_size[1] as f32],
+                _padding: [0; 4],
             };
             self.device_and_queue.queue().write_buffer(
                 &self.uniform_buffer,

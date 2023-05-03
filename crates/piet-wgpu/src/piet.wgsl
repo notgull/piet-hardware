@@ -25,6 +25,9 @@ struct Uniforms {
 
     // Viewport size.
     viewport_size: vec2<f32>,
+
+    // 64-byte padding.
+    padding: vec4<u32>,
 };
 
 struct VertexShaderOutput {
@@ -58,25 +61,27 @@ fn unpack_position(posn: vec2<f32>) -> vec4<f32> {
     );
 }
 
-@vertex
-fn vertex_main(
+struct InVertex {
     @location(0) position: vec2<f32>,
     @location(1) tex_coords: vec2<f32>,
-    @location(2) color: u32
-) -> VertexShaderOutput {
+    @location(2) color: u32,
+}
+
+@vertex
+fn vertex_main(vert: InVertex) -> VertexShaderOutput {
     var out: VertexShaderOutput;
 
     // Transform the vertex position.
-    var pos: vec3<f32> = uniforms.transform * vec3<f32>(position, 1.0);
+    var pos: vec3<f32> = uniforms.transform * vec3<f32>(vert.position, 1.0);
     pos = pos / pos.z;
 
     out.position = unpack_position(pos.xy);
-    out.tex_coords = tex_coords;
+    out.tex_coords = vert.tex_coords;
     out.mask_coords = vec2<f32>(
-        tex_coords.x / uniforms.viewport_size.x,
-        tex_coords.y / uniforms.viewport_size.y,
+        vert.tex_coords.x / uniforms.viewport_size.x,
+        vert.tex_coords.y / uniforms.viewport_size.y,
     );
-    out.color = unpack_color(color);
+    out.color = unpack_color(vert.color);
 
     return out;
 }

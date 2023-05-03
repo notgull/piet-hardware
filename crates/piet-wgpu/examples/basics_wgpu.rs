@@ -71,9 +71,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ))
                 .expect("Failed to create device");
 
-                let context =
-                    WgpuContext::new((device, queue), wgpu::TextureFormat::Rgba8Unorm, 100)
-                        .expect("Failed to create WgpuContext");
+                let context = WgpuContext::new((device, queue), wgpu::TextureFormat::Rgba8Unorm, 1)
+                    .expect("Failed to create WgpuContext");
 
                 state = Some((window, surface, context));
             }
