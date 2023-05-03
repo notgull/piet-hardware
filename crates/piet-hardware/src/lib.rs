@@ -468,67 +468,60 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         // Iterate over the glyphs and use them to write.
         let texture = restore.atlas.as_ref().unwrap().texture().clone();
         let text = restore.context.text().clone();
-        let result = restore.context.fill_rects(
-            layout
-                .buffer()
-                .layout_runs()
-                .flat_map(|run| {
-                    // Combine the run's glyphs and the layout's y position.
-                    run.glyphs
-                        .iter()
-                        .map(move |glyph| (glyph, run.line_y as f64))
-                })
-                .filter_map({
-                    let atlas = restore.atlas.as_mut().unwrap();
-                    |(glyph, line_y)| {
-                        // Get the rectangle in texture space representing the glyph.
-                        let font_data = text.with_font_system_mut(|fs| {
-                            fs.get_font(glyph.cache_key.font_id)
-                                .expect("font not found")
-                        });
-                        let GlyphData {
-                            uv_rect,
-                            offset,
-                            size,
-                        } = match atlas.uv_rect(glyph, &font_data) {
-                            Ok(rect) => rect,
-                            Err(e) => {
-                                tracing::trace!("failed to get uv rect: {}", e);
-                                return None;
-                            }
-                        };
+        let rects = layout
+            .buffer()
+            .layout_runs()
+            .flat_map(|run| {
+                // Combine the run's glyphs and the layout's y position.
+                run.glyphs
+                    .iter()
+                    .map(move |glyph| (glyph, run.line_y as f64))
+            })
+            .filter_map({
+                let atlas = restore.atlas.as_mut().unwrap();
+                |(glyph, line_y)| {
+                    // Get the rectangle in texture space representing the glyph.
+                    let font_data = text.with_font_system_mut(|fs| {
+                        fs.get_font(glyph.cache_key.font_id)
+                            .expect("font not found")
+                    });
+                    let GlyphData {
+                        uv_rect,
+                        offset,
+                        size,
+                    } = match atlas.uv_rect(glyph, &font_data) {
+                        Ok(rect) => rect,
+                        Err(e) => {
+                            tracing::trace!("failed to get uv rect: {}", e);
+                            return None;
+                        }
+                    };
 
-                        // Get the rectangle in screen space representing the glyph.
-                        let pos_rect = Rect::from_origin_size(
-                            (
-                                glyph.x_int as f64
-                                    + pos.x
-                                    + offset.x,
-                                glyph.y_int as f64
-                                    + line_y
-                                    + pos.y
-                                    + offset.y,
-                            ),
-                            size,
-                        );
+                    // Get the rectangle in screen space representing the glyph.
+                    let pos_rect = Rect::from_origin_size(
+                        (
+                            glyph.x_int as f64 + pos.x + offset.x,
+                            glyph.y_int as f64 + line_y + pos.y + offset.y,
+                        ),
+                        size,
+                    );
 
-                        let color = match glyph.color_opt {
-                            Some(color) => {
-                                let [r, g, b, a] = [color.r(), color.g(), color.b(), color.a()];
-                                piet::Color::rgba8(r, g, b, a)
-                            }
-                            None => piet::util::DEFAULT_TEXT_COLOR
-                        };
+                    let color = match glyph.color_opt {
+                        Some(color) => {
+                            let [r, g, b, a] = [color.r(), color.g(), color.b(), color.a()];
+                            piet::Color::rgba8(r, g, b, a)
+                        }
+                        None => piet::util::DEFAULT_TEXT_COLOR,
+                    };
 
-                        Some(TessRect {
-                            pos: pos_rect,
-                            uv: uv_rect,
-                            color,
-                        })
-                    }
-                }),
-            Some(&texture),
-        );
+                    Some(TessRect {
+                        pos: pos_rect,
+                        uv: uv_rect,
+                        color,
+                    })
+                }
+            });
+        let result = restore.context.fill_rects(rects, Some(&texture));
 
         drop(restore);
         leap!(self, result);

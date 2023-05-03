@@ -146,8 +146,13 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                 // A: ab_glyph already exists in the winit dep tree, which this crate is intended
                 //    to be used with.
                 let font_ref = ab_glyph::FontRef::try_from_slice(font_data.data()).piet_err()?;
-                let glyph_id = ab_glyph::GlyphId(glyph.cache_key.glyph_id)
-                    .with_scale(f32::from_bits(glyph.cache_key.font_size_bits));
+                let glyph_id = ab_glyph::GlyphId(glyph.cache_key.glyph_id).with_scale_and_position(
+                    f32::from_bits(glyph.cache_key.font_size_bits),
+                    (
+                        glyph.cache_key.x_bin.as_float(),
+                        glyph.cache_key.y_bin.as_float(),
+                    ),
+                );
                 let outline = font_ref.outline_glyph(glyph_id).ok_or_else(|| {
                     Pierror::BackendError({
                         format!("Failed to outline glyph {}", glyph.cache_key.glyph_id).into()
