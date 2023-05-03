@@ -23,6 +23,7 @@ use piet::kurbo::{Point, Rect, Vec2};
 use piet::{GradientStop, RenderContext as _};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    util::init();
     let mut gradient_brush = None;
     util::with_renderer(move |render_context, width, height| {
         let gradient = gradient_brush.get_or_insert_with(|| {

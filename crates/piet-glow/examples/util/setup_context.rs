@@ -22,6 +22,14 @@ mod util {
     use piet_glow::RenderContext;
 
     #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
+    pub(crate) fn init() {}
+
+    #[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
+    pub(crate) fn init() {
+        std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+    }
+
+    #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
     pub(crate) fn with_renderer(
         mut f: impl FnMut(&mut RenderContext<'_, glow::Context>, u32, u32) + 'static,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -246,6 +254,7 @@ mod util {
         })
     }
 
+    #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
     fn debug_message_callback(
         source: u32,
         ty: u32,
@@ -289,5 +298,104 @@ mod util {
             },
             _ => (),
         };
+    }
+
+    #[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
+    pub(crate) fn with_renderer(
+        mut f: impl FnMut(&mut RenderContext<'_, glow::Context>, u32, u32) + 'static,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use wasm_bindgen::JsCast;
+        use wasm_bindgen::closure::Closure;
+
+        use std::rc::Rc;
+        use std::cell::RefCell;
+
+        let canvas = web_sys::window()
+            .unwrap()
+            .document()
+            .unwrap()
+            .create_element("canvas")
+            .unwrap()
+            .dyn_into::<web_sys::HtmlCanvasElement>()
+            .unwrap();
+        let webgl2_context = canvas
+            .get_context("webgl2")
+            .unwrap()
+            .unwrap()
+            .dyn_into::<web_sys::WebGl2RenderingContext>()
+            .unwrap();
+        let gl = glow::Context::from_webgl2_context(webgl2_context);
+
+        // Add the canvas to the DOM.
+        web_sys::window()
+            .unwrap()
+            .document()
+            .unwrap()
+            .body()
+            .unwrap()
+            .append_child(&canvas)
+            .unwrap();
+
+        let mut renderer = unsafe {
+            piet_glow::GlContext::new(gl).unwrap()
+        };
+
+        let timeout_cb = Rc::new(RefCell::new(None));
+        let animate_cb: Rc<RefCell<Option<Closure<_>>>> = Rc::new(RefCell::new(None));
+
+        // Run the callback every 1/60th of a second.
+        let request_anim_frame = {
+            let animate_cb = animate_cb.clone();
+            move || {
+                web_sys::window().unwrap()
+                    .request_animation_frame(
+                        animate_cb
+                            .borrow()
+                            .as_ref()
+                            .unwrap()
+                            .as_ref()
+                            .unchecked_ref()
+                    )
+                    .unwrap()
+            }
+        };
+        *timeout_cb.borrow_mut() = Some(Closure::wrap(Box::new(move || {
+            request_anim_frame();
+        }) as Box<dyn FnMut()>));
+
+        let timeout_ms = {
+            let spf = 1.0 / 60.0;
+            (spf * 1000.0) as i32
+        };
+        let draw_frame = {
+            let timeout_cb = timeout_cb.clone();
+            move || {
+                let size = (canvas.width(), canvas.height());
+                let mut context = unsafe {
+                    renderer.render_context(size.0 * 3, size.1 * 3)
+                };
+                f(&mut context, size.0, size.1);
+                web_sys::window()
+                    .unwrap()
+                    .set_timeout_with_callback_and_timeout_and_arguments_0(
+                        timeout_cb.borrow().as_ref().unwrap().as_ref().unchecked_ref(),
+                        timeout_ms
+                    )
+                    .unwrap();
+            }
+        };
+        let draw_frame = Rc::new(RefCell::new(draw_frame));
+        *animate_cb.borrow_mut() = Some(Closure::wrap(Box::new({
+            let draw_frame = draw_frame.clone();
+            move || {
+                (*draw_frame.borrow_mut())();
+            }
+        }) as Box<dyn FnMut()>));
+
+        // Start the animation.
+        (draw_frame.borrow_mut())();
+
+        // Throw an exception to stop the program.
+        wasm_bindgen::throw_str("Program exited.")
     }
 }

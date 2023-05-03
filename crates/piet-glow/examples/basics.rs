@@ -22,18 +22,19 @@ include!("util/setup_context.rs");
 use piet::kurbo::{Affine, BezPath, Point, Rect, Vec2};
 use piet::{FontFamily, GradientStop, RenderContext as _, Text, TextLayout, TextLayoutBuilder};
 
-use std::path::Path;
-use std::time::{Duration, Instant};
+use instant::{Duration, Instant};
+
+const ORANGES: &[u8] = include_bytes!("assets/oranges.jpg");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    util::init();
+
     // A path representing a star.
     let star = generate_five_pointed_star(Point::new(0.0, 0.0), 75.0, 150.0);
     let mut tick = 0;
 
     // Get the test image at $CRATE_ROOT/examples/assets/test-image.png
-    let manifest_root = env!("CARGO_MANIFEST_DIR");
-    let path = Path::new(manifest_root).join("examples/assets/oranges.jpg");
-    let image = image::open(path)?.to_rgba8();
+    let image = image::load_from_memory(ORANGES)?.to_rgba8();
 
     // Convert the image to a byte buffer.
     let size = image.dimensions();
@@ -154,35 +155,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         render_context.stroke(out_rect, outline, 3.0);
 
-        // Update the FPS counter, if necessary.
-        num_frames += 1;
-        let now = Instant::now();
-        if now - last_second >= Duration::from_secs(1) {
-            let fps_string = format!("Frames per Second: {num_frames}");
-            let fps_text = render_context
-                .text()
-                .new_text_layout(fps_string)
-                .font(FontFamily::SERIF, 24.0)
-                .text_color(piet::Color::rgb8(0x11, 0x22, 0x22))
-                .build()
-                .unwrap();
+        // Text isn't supported on WASM yet.
+        if cfg!(not(any(target_arch = "wasm32", target_arch = "wasm64"))) {
+            // Update the FPS counter, if necessary.
+            num_frames += 1;
+            let now = Instant::now();
+            if now - last_second >= Duration::from_secs(1) {
+                let fps_string = format!("Frames per Second: {num_frames}");
+                let fps_text = render_context
+                    .text()
+                    .new_text_layout(fps_string)
+                    .font(FontFamily::SERIF, 24.0)
+                    .text_color(piet::Color::rgb8(0x11, 0x22, 0x22))
+                    .build()
+                    .unwrap();
 
-            current_fps = Some(fps_text);
+                current_fps = Some(fps_text);
 
-            last_second = now;
-            num_frames = 0;
-        }
+                last_second = now;
+                num_frames = 0;
+            }
 
-        // Draw the FPS counter.
-        if let Some(current_fps) = current_fps.as_ref() {
-            let size = current_fps.size();
-            let pt = (
-                width as f64 - size.width - 10.0,
-                height as f64 - size.height - 10.0,
-            );
+            // Draw the FPS counter.
+            if let Some(current_fps) = current_fps.as_ref() {
+                let size = current_fps.size();
+                let pt = (
+                    width as f64 - size.width - 10.0,
+                    height as f64 - size.height - 10.0,
+                );
 
-            if pt.0 > 0.0 || pt.1 > 0.0 {
-                render_context.draw_text(current_fps, pt);
+                if pt.0 > 0.0 || pt.1 > 0.0 {
+                    render_context.draw_text(current_fps, pt);
+                }
             }
         }
 

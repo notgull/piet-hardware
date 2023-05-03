@@ -18,12 +18,30 @@ piet = { version = "0.6.2", default-features = false }
 piet-hardware = { version = "0.1.0", path = "../piet-hardware" }
 tracing = { version = "0.1.37", default-features = false }
 
-[dev-dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 glutin = { version = "0.30.6", default-features = false, features = ["x11", "egl", "wgl", "glx"] }
 glutin-winit = { version = "0.3.0", default-features = false, features = ["x11", "glx", "egl", "wgl"] }
-image = { version = "0.24.5", default-features = false, features = ["png", "jpeg"] }
+winit = { version = "0.28.2", default-features = false, features = ["x11"] }
 raw-window-handle = "0.5.0"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies.web_sys]
+version = "~0.3.61"
+package = "web-sys"
+features = [
+  "Document",
+  "Element",
+  "HtmlCanvasElement",
+  "WebGl2RenderingContext"
+]
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+console_error_panic_hook = "0.1"
+wasm-bindgen = "0.2"
+
+[dev-dependencies]
+image = { version = "0.24.5", default-features = false, features = ["png", "jpeg"] }
+instant = { version = "0.1.12", features = ["wasm-bindgen"] }
 tiny-skia = "0.8.3"
 tracing = { version = "0.1.37", features = ["log"] }
 tracing-subscriber = "0.3.16"
-winit = { version = "0.28.2", default-features = false, features = ["x11"] }
+
