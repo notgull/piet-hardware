@@ -26,6 +26,7 @@
 precision mediump float;
 out vec4 outFragColor;
 #define gl_FragColor outFragColor
+#define texture2D texture
 #endif
 
 // Vertex shader gives us the color, the texture coordinates, and the mask coordinates.

@@ -25,6 +25,7 @@ use piet::RenderContext as _;
 use std::path::Path;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    util::init();
     // Get the test image at $CRATE_ROOT/examples/assets/test-image.png
     let manifest_root = env!("CARGO_MANIFEST_DIR");
     let path = Path::new(manifest_root).join("examples/assets/oranges.jpg");

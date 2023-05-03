@@ -189,13 +189,16 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
             );
 
             let (wrap_s, wrap_t) = match repeat {
-                piet_hardware::RepeatStrategy::Color(color) => {
-                    let (r, g, b, a) = color.as_rgba();
-                    self.context.tex_parameter_f32_slice(
-                        glow::TEXTURE_2D,
-                        glow::TEXTURE_BORDER_COLOR,
-                        &[c!(r), c!(g), c!(b), c!(a)],
-                    );
+                piet_hardware::RepeatStrategy::Color(_color) => {
+                    #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm32")))]
+                    {
+                        let (r, g, b, a) = _color.as_rgba();
+                        self.context.tex_parameter_f32_slice(
+                            glow::TEXTURE_2D,
+                            glow::TEXTURE_BORDER_COLOR,
+                            &[c!(r), c!(g), c!(b), c!(a)],
+                        );
+                    }
 
                     (glow::CLAMP_TO_BORDER, glow::CLAMP_TO_BORDER)
                 }

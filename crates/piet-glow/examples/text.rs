@@ -22,6 +22,7 @@ include!("util/setup_context.rs");
 use piet::{RenderContext as _, Text, TextLayoutBuilder};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    util::init();
     let mut layout = None;
     let mut last_width = 0;
 

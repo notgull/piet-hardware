@@ -33,6 +33,7 @@ const RAINBOW: &[Color] = &[
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    util::init();
     let mut brush = None;
 
     util::with_renderer(move |render_context, width, height| {
