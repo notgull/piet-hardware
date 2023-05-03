@@ -246,6 +246,7 @@ mod util {
         })
     }
 
+    #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
     fn debug_message_callback(
         source: u32,
         ty: u32,
@@ -382,6 +383,7 @@ mod util {
         // Start the animation.
         (draw_frame.borrow_mut())();
 
-        Ok(())
+        // Throw an exception to stop the program.
+        wasm_bindgen::throw_str("Program exited.")
     }
 }

@@ -22,8 +22,9 @@ include!("util/setup_context.rs");
 use piet::kurbo::{Affine, BezPath, Point, Rect, Vec2};
 use piet::{FontFamily, GradientStop, RenderContext as _, Text, TextLayout, TextLayoutBuilder};
 
-use std::path::Path;
 use std::time::{Duration, Instant};
+
+const ORANGES: &[u8] = include_bytes!("assets/oranges.jpg");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A path representing a star.
@@ -31,9 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tick = 0;
 
     // Get the test image at $CRATE_ROOT/examples/assets/test-image.png
-    let manifest_root = env!("CARGO_MANIFEST_DIR");
-    let path = Path::new(manifest_root).join("examples/assets/oranges.jpg");
-    let image = image::open(path)?.to_rgba8();
+    let image = image::load_from_memory(ORANGES)?.to_rgba8();
 
     // Convert the image to a byte buffer.
     let size = image.dimensions();
