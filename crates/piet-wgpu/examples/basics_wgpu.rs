@@ -18,6 +18,8 @@
 //! The `piet-glow` basics.rs example, but with piet-wgpu.
 
 use futures_lite::future;
+use std::rc::Rc;
+
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::WindowBuilder;
@@ -39,6 +41,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut state = None;
+    let format = wgpu::TextureFormat::Bgra8Unorm;
+    let mut config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+        format,
+        width: 0,
+        height: 0,
+        present_mode: wgpu::PresentMode::AutoVsync,
+        alpha_mode: wgpu::CompositeAlphaMode::Inherit,
+        view_formats: vec![format],
+    };
     let mut window_size = (0, 0);
 
     event_loop.run(move |ev, elwt, control_flow| {
@@ -51,8 +63,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .build(elwt)
                     .expect("Failed to create window");
 
+                let size = window.inner_size();
+
                 let surface =
                     unsafe { instance.create_surface(&window) }.expect("Failed to create surface");
+
                 let adaptor =
                     future::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                         compatible_surface: Some(&surface),
@@ -70,11 +85,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None,
                 ))
                 .expect("Failed to create device");
+                let device = Rc::new(device);
 
-                let context = WgpuContext::new((device, queue), wgpu::TextureFormat::Rgba8Unorm, 1)
+                config.width = size.width;
+                config.height = size.height;
+                surface.configure(&device, &config);
+
+                let context = WgpuContext::new((device.clone(), queue), format, 1)
                     .expect("Failed to create WgpuContext");
 
-                state = Some((window, surface, context));
+                state = Some((window, surface, context, device));
             }
 
             Event::Suspended => {
@@ -83,7 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             Event::RedrawEventsCleared => {
-                if let Some((_, surface, context)) = &mut state {
+                if let Some((_, surface, context, _)) = &mut state {
                     let frame = surface
                         .get_current_texture()
                         .expect("Failed to get texture view");
@@ -108,6 +128,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 WindowEvent::CloseRequested => control_flow.set_exit(),
                 WindowEvent::Resized(size) => {
                     window_size = (size.width, size.height);
+                    if let Some((_, surface, _, device)) = &state {
+                        config.width = size.width;
+                        config.height = size.height;
+                        surface.configure(device, &config);
+                    }
                 }
                 _ => {}
             },

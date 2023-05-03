@@ -278,9 +278,6 @@ struct Uniforms {
 
     /// Viewport size.
     viewport_size: [f32; 2],
-
-    /// Make the struct 64 bytes.
-    _padding: [u32; 4],
 }
 
 impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
@@ -301,14 +298,23 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
             source: wgpu::ShaderSource::Wgsl(SHADER_SOURCE.into()),
         });
 
+        let uniform_data = {
+            let mut uniform_data = bytemuck::bytes_of(&Uniforms {
+                transform: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                viewport_size: [0.0, 0.0],
+            })
+            .to_vec();
+
+            // Extend to the next power of two.
+            let new_len = uniform_data.len().next_power_of_two();
+            uniform_data.resize(new_len, 0);
+            uniform_data
+        };
+
         // Create a buffer for the uniforms.
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("piet-wgpu uniform buffer"),
-            contents: bytemuck::cast_slice(&[Uniforms {
-                transform: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-                viewport_size: [0.0, 0.0],
-                _padding: [0; 4],
-            }]),
+            contents: &uniform_data,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let uniform_buffer_layout =
@@ -319,7 +325,9 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
                     visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
                         has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(mem::size_of::<Uniforms>() as u64),
+                        min_binding_size: NonZeroU64::new(
+                            mem::size_of::<Uniforms>().next_power_of_two() as u64,
+                        ),
                         ty: wgpu::BufferBindingType::Uniform,
                     },
                     count: None,
@@ -365,7 +373,11 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
         // Use these two to create the pipline layout.
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("piet-wgpu pipeline layout"),
-            bind_group_layouts: &[&uniform_buffer_layout, &texture_buffer_layout],
+            bind_group_layouts: &[
+                &uniform_buffer_layout,
+                &texture_buffer_layout,
+                &texture_buffer_layout,
+            ],
             push_constant_ranges: &[],
         });
 
@@ -518,7 +530,6 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
             let uniforms = Uniforms {
                 transform: affine_to_column_major(transform),
                 viewport_size: [viewport_size[0] as f32, viewport_size[1] as f32],
-                _padding: [0; 4],
             };
             self.device_and_queue.queue().write_buffer(
                 &self.uniform_buffer,

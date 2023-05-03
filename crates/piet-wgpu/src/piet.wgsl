@@ -25,9 +25,6 @@ struct Uniforms {
 
     // Viewport size.
     viewport_size: vec2<f32>,
-
-    // 64-byte padding.
-    padding: vec4<u32>,
 };
 
 struct VertexShaderOutput {
