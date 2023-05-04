@@ -20,11 +20,11 @@
 // Public License along with `piet-hardware`. If not, see <https://www.gnu.org/licenses/>.
 
 struct Uniforms {
-    // 3x3 matrix for transforming vertices.
-    transform: mat3x3<f32>,
-
     // Viewport size.
     viewport_size: vec2<f32>,
+
+    // 3x3 matrix for transforming vertices.
+    transform: mat3x3<f32>,
 };
 
 struct VertexShaderOutput {
@@ -42,10 +42,10 @@ struct VertexShaderOutput {
 
 fn unpack_color(color: u32) -> vec4<f32> {
     return vec4<f32>(
-        f32(color & 255u),
-        f32((color >> 8u) & 255u),
-        f32((color >> 16u) & 255u),
         f32((color >> 24u) & 255u),
+        f32((color >> 16u) & 255u),
+        f32((color >> 8u) & 255u),
+        f32(color & 255u),
     ) / 255.0;
 }
 
@@ -69,7 +69,8 @@ fn vertex_main(vert: InVertex) -> VertexShaderOutput {
     var out: VertexShaderOutput;
 
     // Transform the vertex position.
-    var pos: vec3<f32> = uniforms.transform * vec3<f32>(vert.position, 1.0);
+    // TODO: Transform
+    var pos: vec3<f32> = vec3<f32>(vert.position, 1.0);
     pos = pos / pos.z;
 
     out.position = unpack_position(pos.xy);

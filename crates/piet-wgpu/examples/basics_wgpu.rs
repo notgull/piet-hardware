@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Drawing function.
     let mut solid_red = None;
-    //let mut outline = None;
+    let mut outline = None;
     let mut draw = move |rc: &mut RenderContext<'_, _>| {
         rc.clear(None, piet::Color::rgb8(0x87, 0xce, 0xeb));
 
@@ -58,8 +58,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         rc.fill(&red_star, solid_red);
 
         // Draw a black outline using the path.
-        //let outline = outline.get_or_insert_with(|| rc.solid_brush(piet::Color::BLACK));
-        //rc.stroke(&red_star, outline, 5.0);
+        let outline = outline.get_or_insert_with(|| rc.solid_brush(piet::Color::BLACK));
+        rc.stroke(&red_star, outline, 5.0);
 
         // Draw a solid red star with a black outline.
         tick += 1;
@@ -69,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut state = None;
     let format = wgpu::TextureFormat::Bgra8Unorm;
     let mut config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format,
         width: 0,
         height: 0,

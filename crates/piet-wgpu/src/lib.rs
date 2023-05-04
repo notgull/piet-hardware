@@ -88,6 +88,9 @@ struct GpuContext<DaQ: ?Sized> {
     /// The view of the texture.
     texture_view: RefCell<Option<wgpu::TextureView>>,
 
+    /// Unique IDs for textures and buffers.
+    next_id: Cell<usize>,
+
     /// The `wgpu` device and queue.
     device_and_queue: DaQ,
 }
@@ -225,7 +228,7 @@ impl Buffer {
         buffer_id: &'static str,
     ) -> Self {
         let mut this = Self {
-            id: 0x1337,
+            id: base.next_id(),
             capacity: 0,
             buffer_id,
             usage,
@@ -242,11 +245,11 @@ impl Buffer {
 #[repr(C)]
 #[derive(bytemuck::Pod, bytemuck::Zeroable, Copy, Clone)]
 struct Uniforms {
-    /// 3x3 transformation matrix.
-    transform: [[f32; 3]; 3],
-
     /// Viewport size.
     viewport_size: [f32; 2],
+
+    /// 3x3 transformation matrix.
+    transform: [[f32; 3]; 3],
 }
 
 impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
@@ -429,7 +432,14 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
             clear_color: Cell::new(None),
             texture_view: RefCell::new(None),
             encoder: RefCell::new(encoder),
+            next_id: Cell::new(0),
         }
+    }
+
+    fn next_id(&self) -> usize {
+        let id = self.next_id.get();
+        self.next_id.set(id + 1);
+        id
     }
 }
 
@@ -464,6 +474,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         interpolation: InterpolationMode,
         repeat: piet_hardware::RepeatStrategy,
     ) -> Result<Self::Texture, Self::Error> {
+        let id = self.next_id();
         let filter_mode = match interpolation {
             InterpolationMode::Bilinear => wgpu::FilterMode::Linear,
             InterpolationMode::NearestNeighbor => wgpu::FilterMode::Nearest,
@@ -496,7 +507,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
             .device_and_queue
             .device()
             .create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("piet-wgpu sampler"),
+                label: Some(&format!("piet-wgpu sampler {id}")),
                 compare: None,
                 mag_filter: filter_mode,
                 min_filter: filter_mode,
@@ -507,7 +518,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
             });
 
         Ok(WgpuTexture(Rc::new(RefCell::new(TextureInner {
-            id: 0x1337,
+            id,
             texture: None,
             format: ImageFormat::Grayscale,
             sampler,
@@ -545,7 +556,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
                 .device_and_queue
                 .device()
                 .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("piet-wgpu texture"),
+                    label: Some(&format!("piet-wgpu texture {}", guard.id)),
                     size,
                     mip_level_count: 1,
                     sample_count: 1,
@@ -710,8 +721,6 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         vertices: &[piet_hardware::Vertex],
         indices: &[u32],
     ) {
-        std::println!("vertices: {vertices:?}\nindices: {indices:?}");
-
         let mut vb = buffer.0.vertex_buffer.borrow_mut();
         let mut ib = buffer.0.index_buffer.borrow_mut();
 
@@ -729,7 +738,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         self.device_and_queue.queue().write_buffer(
             vb.buffer.as_ref().unwrap(),
             0,
-            bytemuck::cast_slice(vertices),
+            bytemuck::cast_slice::<Vertex, u8>(vertices),
         );
         vb.len = vertices.len();
 
@@ -755,8 +764,6 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         let mask_texture = mask_texture.0.borrow();
         let vb = vertex_buffer.0.vertex_buffer.borrow();
         let ib = vertex_buffer.0.index_buffer.borrow();
-
-        println!("vertices: {}, indices: {}", vb.len, ib.len);
 
         // Create a command encoder and a render pass.
         let mut encoder = self.encoder.borrow_mut();
@@ -810,11 +817,11 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         // Get counts.
         let num_vertices: u64 = vb.len.try_into().expect("too many vertices");
         let num_indices: u32 = ib.len.try_into().expect("too many indices");
-        pass.set_vertex_buffer(0, vb.buffer.as_ref().unwrap().slice(..num_vertices));
         pass.set_index_buffer(
             ib.buffer.as_ref().unwrap().slice(..num_indices as u64 * 4),
             wgpu::IndexFormat::Uint32,
         );
+        pass.set_vertex_buffer(0, vb.buffer.as_ref().unwrap().slice(..num_vertices));
 
         // Draw the triangles.
         pass.draw_indexed(0..num_indices, 0, 0..1);
@@ -1161,8 +1168,8 @@ fn affine_to_column_major(affine: &Affine) -> [[f32; 3]; 3] {
 
     // Column major
     [
-        [a as f32, b as f32, 0.0],
-        [c as f32, d as f32, 0.0],
+        [a as f32, c as f32, 0.0],
+        [b as f32, d as f32, 0.0],
         [e as f32, f as f32, 1.0],
     ]
 }
