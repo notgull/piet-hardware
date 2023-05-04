@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let image_data = image.into_raw();
 
     // Drawing function.
-    let mut solid_red = None;
+    let mut solid_olive = None;
     let mut outline = None;
     let mut image = None;
 
@@ -65,8 +65,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         // Draw a solid red using the path.
-        let solid_red = solid_red.get_or_insert_with(|| rc.solid_brush(piet::Color::OLIVE));
-        rc.fill(&red_star, solid_red);
+        let solid_olive = solid_olive.get_or_insert_with(|| rc.solid_brush(piet::Color::OLIVE));
+        rc.fill(&red_star, solid_olive);
 
         // Draw a black outline using the path.
         let outline = outline.get_or_insert_with(|| rc.solid_brush(piet::Color::BLACK));
@@ -74,14 +74,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Create an image and draw it.
         let image = image.get_or_insert_with(|| {
-            rc
-                .make_image(
-                    image_size.0 as _,
-                    image_size.1 as _,
-                    &image_data,
-                    piet::ImageFormat::RgbaSeparate,
-                )
-                .unwrap()
+            rc.make_image(
+                image_size.0 as _,
+                image_size.1 as _,
+                &image_data,
+                piet::ImageFormat::RgbaSeparate,
+            )
+            .unwrap()
         });
 
         let scale = |x: f64| (x + 1.0) * 50.0;
@@ -110,7 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut state = None;
-    let format = wgpu::TextureFormat::Bgra8Unorm;
+    let format = wgpu::TextureFormat::Bgra8UnormSrgb;
     let mut config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format,

@@ -749,10 +749,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
             // Get the bufer slices to pass to the shader.
             let num_indices =
                 (index_slice.range.1 - index_slice.range.0) as usize / mem::size_of::<u32>();
-            let vertex_slice = vb
-                .buffer
-                .slice(*vertex_slice, 1)
-                .unwrap();
+            let vertex_slice = vb.buffer.slice(*vertex_slice, 1).unwrap();
             let index_slice = ib.buffer.slice(*index_slice, 1).unwrap();
 
             // Bind the slices into the shader.
@@ -864,9 +861,12 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
 
         let size = wgpu::Extent3d {
             width: size.0,
-            height: size.0,
+            height: size.1,
             depth_or_array_layers: 1,
         };
+
+        let data_len = data.map_or(0, |d| d.len());
+        tracing::debug!(size=?size, format=?format, data_len=%data_len, "Writing a texture");
 
         // Get the texture to write to.
         let mut guard = tex.0.borrow_mut();
@@ -913,6 +913,11 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         };
 
         // Queue a data write to the texture.
+        let data_layout = wgpu::ImageDataLayout {
+            offset: 0,
+            bytes_per_row: NonZeroU32::new(size.width * bytes_per_pixel),
+            rows_per_image: NonZeroU32::new(size.height),
+        };
         self.device_and_queue.queue().write_texture(
             wgpu::ImageCopyTexture {
                 texture,
@@ -921,11 +926,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
                 aspect: wgpu::TextureAspect::All,
             },
             data,
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: NonZeroU32::new(size.width * bytes_per_pixel),
-                rows_per_image: NonZeroU32::new(size.height),
-            },
+            data_layout,
             size,
         );
     }
