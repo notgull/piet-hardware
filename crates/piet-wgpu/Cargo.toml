@@ -13,12 +13,13 @@ description = "A hardware-accelerated 2D graphics backend for piet using wgpu"
 
 [dependencies]
 bytemuck = { version = "1.13.1", features = ["derive"] }
-image = { version = "0.24.6", default-features = false, features = ["png"] }
 piet-hardware = { version = "0.1.0", path = "../piet-hardware" }
 tracing = "0.1.37"
 wgpu = "0.15.1"
 
 [dev-dependencies]
 futures-lite = "1.13.0"
+image = { version = "0.24.6", default-features = false, features = ["png"] }
+instant = { version = "0.1.12", default-features = false, features = ["wasm-bindgen"] }
 tracing-subscriber = "0.3.17"
 winit = "0.28.3"

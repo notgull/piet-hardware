@@ -18,6 +18,7 @@
 //! The `piet-glow` basics.rs example, but with piet-wgpu.
 
 use futures_lite::future;
+use instant::{Duration, Instant};
 use std::rc::Rc;
 
 use winit::event::{Event, WindowEvent};
@@ -55,7 +56,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut outline = None;
     let mut image = None;
 
-    let mut draw = move |rc: &mut RenderContext<'_, _>| {
+    let mut last_second = Instant::now();
+    let mut num_frames = 0;
+    let mut current_fps = None;
+
+    let mut draw = move |rc: &mut RenderContext<'_, _>, width, height| {
         rc.clear(None, piet::Color::rgb8(0x87, 0xce, 0xeb));
 
         let red_star = {
@@ -103,7 +108,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             piet::InterpolationMode::Bilinear,
         );
 
-        // Draw a solid red star with a black outline.
+        // Also draw a subregion of the image.
+        let out_rect = Rect::new(100.0, 400.0, 200.0, 500.0);
+        rc.draw_image_area(
+            image,
+            Rect::new(
+                25.0 + posn_shift_x,
+                25.0 + posn_shift_y,
+                100.0 + posn_shift_x,
+                100.0 + posn_shift_y,
+            ),
+            out_rect,
+            piet::InterpolationMode::Bilinear,
+        );
+        rc.stroke(out_rect, outline, 3.0);
+
+        // Text isn't supported on WASM yet.
+        if cfg!(not(any(target_arch = "wasm32", target_arch = "wasm64"))) {
+            use piet::{Text as _, TextLayout as _, TextLayoutBuilder as _};
+
+            // Update the FPS counter, if necessary.
+            num_frames += 1;
+            let now = Instant::now();
+            if now - last_second >= Duration::from_secs(1) {
+                let fps_string = format!("Frames per Second: {num_frames}");
+                let fps_text = rc
+                    .text()
+                    .new_text_layout(fps_string)
+                    .font(piet::FontFamily::SERIF, 24.0)
+                    .build()
+                    .unwrap();
+
+                current_fps = Some(fps_text);
+
+                last_second = now;
+                num_frames = 0;
+            }
+
+            // Draw the FPS counter.
+            if let Some(current_fps) = current_fps.as_ref() {
+                let size = current_fps.size();
+                let pt = (
+                    width as f64 - size.width - 10.0,
+                    height as f64 - size.height - 10.0,
+                );
+
+                if pt.0 > 0.0 || pt.1 > 0.0 {
+                    rc.draw_text(current_fps, pt);
+                }
+            }
+        }
+
         tick += 1;
         rc.finish().unwrap();
     };
@@ -185,6 +240,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             window_size.0,
                             window_size.1,
                         ),
+                        window_size.0,
+                        window_size.1,
                     );
 
                     // Present the frame.
