@@ -24,9 +24,11 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::WindowBuilder;
 
-use piet_hardware::piet::kurbo::{Affine, BezPath, Point};
+use piet_hardware::piet::kurbo::{Affine, BezPath, Point, Rect};
 use piet_hardware::piet::{self, RenderContext as _};
 use piet_wgpu::{RenderContext, WgpuContext};
+
+const ORANGES: &[u8] = include_bytes!("../../piet-glow/examples/assets/oranges.jpg");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
@@ -41,9 +43,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let star = generate_five_pointed_star(Point::new(0.0, 0.0), 75.0, 150.0);
     let mut tick = 0;
 
+    // Get the test image.
+    let image = image::load_from_memory(ORANGES)?.to_rgba8();
+
+    // Convert the image to a byte buffer.
+    let image_size = image.dimensions();
+    let image_data = image.into_raw();
+
     // Drawing function.
     let mut solid_red = None;
     let mut outline = None;
+    let mut image = None;
+
     let mut draw = move |rc: &mut RenderContext<'_, _>| {
         rc.clear(None, piet::Color::rgb8(0x87, 0xce, 0xeb));
 
@@ -60,6 +71,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Draw a black outline using the path.
         let outline = outline.get_or_insert_with(|| rc.solid_brush(piet::Color::BLACK));
         rc.stroke(&red_star, outline, 5.0);
+
+        // Create an image and draw it.
+        let image = image.get_or_insert_with(|| {
+            rc
+                .make_image(
+                    image_size.0 as _,
+                    image_size.1 as _,
+                    &image_data,
+                    piet::ImageFormat::RgbaSeparate,
+                )
+                .unwrap()
+        });
+
+        let scale = |x: f64| (x + 1.0) * 50.0;
+        let posn_shift_x = scale(((tick as f64) / 25.0).cos());
+        let posn_shift_y = scale(((tick as f64) / 25.0).sin());
+        let posn_x = posn_shift_x + 350.0;
+        let posn_y = posn_shift_y + 350.0;
+
+        let size_shift_x = ((tick as f64) / 50.0).cos() * 25.0;
+        let size_shift_y = ((tick as f64) / 50.0).sin() * 25.0;
+
+        rc.draw_image(
+            image,
+            Rect::new(
+                posn_x,
+                posn_y,
+                posn_x + 100.0 + size_shift_x,
+                posn_y + 100.0 + size_shift_y,
+            ),
+            piet::InterpolationMode::Bilinear,
+        );
 
         // Draw a solid red star with a black outline.
         tick += 1;
