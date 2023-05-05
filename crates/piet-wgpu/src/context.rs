@@ -26,9 +26,11 @@ use super::texture::{BorrowedTexture, WgpuTexture};
 use super::DeviceAndQueue;
 
 use std::cell::{Cell, Ref, RefCell};
+use std::collections::hash_map::{Entry, HashMap};
 use std::convert::Infallible;
 use std::mem;
 use std::num::NonZeroU64;
+use std::rc::Rc;
 
 use piet_hardware::piet::kurbo::Affine;
 use piet_hardware::piet::{Color, InterpolationMode};
@@ -43,14 +45,14 @@ pub(crate) struct GpuContext<DaQ: ?Sized> {
     /// The rendering pipeline.
     pipeline: wgpu::RenderPipeline,
 
-    /// A buffer for uniforms.
-    uniform_buffer: wgpu::Buffer,
-
-    /// The bind group for uniforms.
-    uniform_bind_group: wgpu::BindGroup,
+    /// The bind group layout for uniforms.
+    uniform_bind_layout: wgpu::BindGroupLayout,
 
     /// Bind group for textures.
     texture_bind_layout: wgpu::BindGroupLayout,
+
+    /// The existing uniform buffers.
+    uniform_buffers: RefCell<HashMap<UniformBytes, (wgpu::Buffer, Rc<wgpu::BindGroup>)>>,
 
     /// The clearing color.
     clear_color: Cell<Option<Color>>,
@@ -85,11 +87,11 @@ struct PushedBuffer {
     /// The mask texture to use.
     mask_texture: WgpuTexture,
 
-    /// The transform to apply.
-    transform: Affine,
-
     /// The viewport size.
-    viewport_size: (f32, f32),
+    viewport_size: [f32; 2],
+
+    /// The bind group for uniforms.
+    uniform_bind_group: Rc<wgpu::BindGroup>,
 }
 
 /// A borrowed pushed buffer.
@@ -108,6 +110,9 @@ struct BorrowedPush<'a> {
 
     /// Borrowed mask texture.
     mask_texture: BorrowedTexture<'a>,
+
+    /// The uniform buffer.
+    uniform_bind_group: Rc<wgpu::BindGroup>,
 }
 
 impl PushedBuffer {
@@ -118,6 +123,7 @@ impl PushedBuffer {
             ib: self.buffers.borrow_index_buffer(),
             color_texture: self.color_texture.borrow(),
             mask_texture: self.mask_texture.borrow(),
+            uniform_bind_group: self.uniform_bind_group.clone(),
         }
     }
 }
@@ -135,6 +141,8 @@ struct Uniforms {
     /// 3x3 transformation matrix.
     transform: [[f32; 4]; 3],
 }
+
+type UniformBytes = [u8; mem::size_of::<Uniforms>()];
 
 impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
     /// Create a new GPU context.
@@ -154,31 +162,6 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
             source: wgpu::ShaderSource::Wgsl(SHADER_SOURCE.into()),
         });
 
-        let uniform_data = {
-            let mut uniform_data = bytemuck::bytes_of(&Uniforms {
-                transform: [
-                    [0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 0.0],
-                ],
-                pad: [0xFFFFFFFF; 2],
-                viewport_size: [0.0, 0.0],
-            })
-            .to_vec();
-
-            // Extend to the next power of two.
-            let new_len = uniform_data.len().next_power_of_two();
-            uniform_data.resize(new_len, 0);
-            uniform_data
-        };
-
-        // Create a buffer for uniforms.
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("piet-wgpu uniform buffer"),
-            contents: &uniform_data,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
         // Create a buffer layout for the uniforms.
         let uniform_bind_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -196,14 +179,6 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
                     count: None,
                 }],
             });
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("piet-wgpu uniform bind group"),
-            layout: &uniform_bind_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
 
         // Add texture bindings for the texture and the mask.
         let texture_buffer_layout =
@@ -309,9 +284,9 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
         Self {
             device_and_queue,
             pipeline,
-            uniform_bind_group,
-            uniform_buffer,
+            uniform_bind_layout,
             texture_bind_layout: texture_buffer_layout,
+            uniform_buffers: RefCell::new(HashMap::new()),
             clear_color: Cell::new(None),
             texture_view: RefCell::new(None),
             pushed_buffers: RefCell::new(Vec::new()),
@@ -400,33 +375,23 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
             source:
                 PushedBuffer {
                     buffers,
-                    transform,
-                    viewport_size: (width, height),
                     vertex: vertex_slice,
                     index: index_slice,
+                    viewport_size: [width, height],
                     ..
                 },
             vb,
             ib,
             color_texture,
             mask_texture,
+            uniform_bind_group,
         } in &pushes
         {
             // Set a viewport.
             pass.set_viewport(0.0, 0.0, *width, *height, 0.0, 1.0);
 
             // Set the uniforms.
-            let uniforms = Uniforms {
-                transform: affine_to_column_major(transform),
-                pad: [0xFFFFFFFF; 2],
-                viewport_size: [*width, *height],
-            };
-            self.device_and_queue.queue().write_buffer(
-                &self.uniform_buffer,
-                0,
-                bytemuck::cast_slice(&[uniforms]),
-            );
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_bind_group(0, uniform_bind_group, &[]);
 
             // Bind textures.
             pass.set_bind_group(1, color_texture.bind_group(), &[]);
@@ -554,14 +519,55 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         let vb_slice = vertex_buffer.borrow_vertex_buffer_mut().pop_slice();
         let ib_slice = vertex_buffer.borrow_index_buffer_mut().pop_slice();
 
+        // See if we have an existing bind group for this buffer.
+        let uniforms = Uniforms {
+            transform: affine_to_column_major(transform),
+            pad: [0xFFFFFFFF; 2],
+            viewport_size: [viewport_width as f32, viewport_height as f32],
+        };
+        let bytes: UniformBytes = bytemuck::cast(uniforms);
+
+        let bind_group = match self.uniform_buffers.borrow_mut().entry(bytes) {
+            Entry::Occupied(o) => o.get().1.clone(),
+            Entry::Vacant(entry) => {
+                // Create a new buffer.
+                let buffer = self.device_and_queue.device().create_buffer_init(
+                    &wgpu::util::BufferInitDescriptor {
+                        label: None,
+                        contents: &bytes,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    },
+                );
+
+                // Create a new bind group.
+                let bind_group =
+                    self.device_and_queue
+                        .device()
+                        .create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: None,
+                            layout: &self.uniform_bind_layout,
+                            entries: &[wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: buffer.as_entire_binding(),
+                            }],
+                        });
+
+                // Insert it into the set.
+                let (_, bind_group) = entry.insert((buffer, Rc::new(bind_group)));
+
+                // Return the bind group.
+                bind_group.clone()
+            }
+        };
+
         self.pushed_buffers.borrow_mut().push(PushedBuffer {
             buffers: vertex_buffer.clone(),
             vertex: vb_slice,
             index: ib_slice,
             color_texture: current_texture.clone(),
             mask_texture: mask_texture.clone(),
-            transform: *transform,
-            viewport_size: (viewport_width as f32, viewport_height as f32),
+            uniform_bind_group: bind_group,
+            viewport_size: [viewport_width as f32, viewport_height as f32],
         });
 
         Ok(())
