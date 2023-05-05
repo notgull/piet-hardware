@@ -83,6 +83,9 @@ struct GpuContext<H: HasContext + ?Sized> {
     /// The uniform locations.
     uniforms: Box<[H::UniformLocation]>,
 
+    /// Do we need to check the indices?
+    check_indices: bool,
+
     /// The underlying context.
     context: H,
 }
@@ -437,13 +440,18 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
         }
     }
 
-    unsafe fn write_vertices(
+    fn write_vertices(
         &self,
         buffer: &Self::VertexBuffer,
         vertices: &[piet_hardware::Vertex],
         indices: &[u32],
     ) {
-        debug_assert!(indices.iter().all(|&i| i < vertices.len() as u32),);
+        // Make sure we don't cause undefined behavior on platforms without robust buffer access.
+        if self.check_indices {
+            assert!(indices.iter().all(|&i| i < vertices.len() as u32));
+        } else {
+            debug_assert!(indices.iter().all(|&i| i < vertices.len() as u32));
+        }
 
         unsafe {
             self.context.bind_vertex_array(Some(buffer.vao));
@@ -614,9 +622,17 @@ impl<H: HasContext + ?Sized> GlContext<H> {
             })
             .collect::<Result<Box<[_]>, _>>()?;
 
+        let robust_buffer = context
+            .supported_extensions()
+            .contains("GL_ARB_robust_buffer_access_behavior")
+            || context
+                .supported_extensions()
+                .contains("GL_KHR_robust_buffer_access_behavior");
+
         piet_hardware::Source::new(GpuContext {
             context,
             uniforms,
+            check_indices: !robust_buffer,
             render_program: program,
         })
         .map(|source| GlContext {

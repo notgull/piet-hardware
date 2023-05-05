@@ -41,6 +41,8 @@
 //! This crate works first and foremost by converting drawing operations to a series of
 //! triangles.
 
+#![forbid(unsafe_code, rust_2018_idioms)]
+
 pub use piet;
 
 use lyon_tessellation::FillRule;
@@ -228,8 +230,7 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
         self.source.buffers.rasterizer.fill_rects(rects);
 
         // Push the buffers to the GPU.
-        // SAFETY: The indices are valid.
-        unsafe { self.push_buffers(texture) }
+        self.push_buffers(texture)
     }
 
     /// Fill in the provided shape.
@@ -248,8 +249,7 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
             })?;
 
         // Push the incoming buffers.
-        // SAFETY: The indices are valid.
-        unsafe { self.push_buffers(brush.texture(self.size).as_ref().map(|t| t.texture())) }
+        self.push_buffers(brush.texture(self.size).as_ref().map(|t| t.texture()))
     }
 
     fn stroke_impl(
@@ -271,12 +271,11 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
         )?;
 
         // Push the incoming buffers.
-        // SAFETY: Buffer indices do not exceed the size of the vertex buffer.
-        unsafe { self.push_buffers(brush.texture(self.size).as_ref().map(|t| t.texture())) }
+        self.push_buffers(brush.texture(self.size).as_ref().map(|t| t.texture()))
     }
 
     /// Push the values currently in the renderer to the GPU.
-    unsafe fn push_buffers(&mut self, texture: Option<&Texture<C>>) -> Result<(), Pierror> {
+    fn push_buffers(&mut self, texture: Option<&Texture<C>>) -> Result<(), Pierror> {
         // Upload the vertex and index buffers.
         self.source.buffers.vbo.upload(
             self.source.buffers.rasterizer.vertices(),

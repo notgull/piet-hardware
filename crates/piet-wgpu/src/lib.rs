@@ -24,6 +24,8 @@
 //! [`piet`]: https://crates.io/crates/piet
 //! [`wgpu`]: https://crates.io/crates/wgpu
 
+#![forbid(unsafe_code, rust_2018_idioms)]
+
 use std::borrow;
 
 use piet_hardware::piet::kurbo::Affine;
