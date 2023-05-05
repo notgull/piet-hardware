@@ -116,22 +116,24 @@ struct Buffers<C: GpuContext + ?Sized> {
 impl<C: GpuContext + ?Sized> Source<C> {
     /// Create a new source from a context wrapped in an `Rc`.
     pub fn from_rc(context: Rc<C>) -> Result<Self, Pierror> {
+        let make_white_pixel = || {
+            const WHITE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
+
+            // Setup a white pixel texture.
+            let texture = Texture::new(
+                &context,
+                InterpolationMode::NearestNeighbor,
+                RepeatStrategy::Repeat,
+            )
+            .piet_err()?;
+
+            texture.write_texture((1, 1), piet::ImageFormat::RgbaSeparate, Some(&WHITE));
+
+            Result::<_, Pierror>::Ok(texture)
+        };
+
         Ok(Self {
-            white_pixel: {
-                const WHITE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
-
-                // Setup a white pixel texture.
-                let texture = Texture::new(
-                    &context,
-                    InterpolationMode::NearestNeighbor,
-                    RepeatStrategy::Repeat,
-                )
-                .piet_err()?;
-
-                texture.write_texture((1, 1), piet::ImageFormat::RgbaSeparate, Some(&WHITE));
-
-                texture
-            },
+            white_pixel: make_white_pixel()?,
             buffers: {
                 let vbo = VertexBuffer::new(&context).piet_err()?;
 
