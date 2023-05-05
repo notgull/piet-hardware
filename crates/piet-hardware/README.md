@@ -14,6 +14,7 @@ either:
 * GNU Lesser General Public License as published by the Free Software Foundation, either
 version 3 of the License, or (at your option) any later version.
 * Mozilla Public License as published by the Mozilla Foundation, version 2.
+* The [Patron License](https://github.com/notgull/piet-hardware/blob/main/LICENSE-PATRON.md) for [sponsors](https://github.com/sponsors/notgull) and [contributors](https://github.com/notgull/async-winit/graphs/contributors), who can ignore the copyleft provisions of the GNU AGPL for this project.
 
 `piet-hardware` is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
 without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.

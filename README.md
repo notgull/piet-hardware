@@ -7,19 +7,16 @@ The [`piet-hardware`] crate is the centerpiece of this project. It translates th
 In addition to [`piet-hardware`], this project also contains some crates that implement the [`piet`] API using [`piet-hardware`]. These are:
 
 - [`piet-glow`], an implementation of [`piet`] using the [`glow`] crate for OpenGL and WebGL calls.
+- [`piet-wgpu`], an implementation of [`piet`] using the [`wgpu`] crate.
 
-Crates that are planned in the future:
-
-- `piet-wgpu`, an implementation of [`piet`] using the [`wgpu`] crate.
-- `piet-vulkano`, an implementation of [`piet`] using the [`vulkano`] crate.
-- `piet-metal`, an implementation of [`piet`] using the Metal API.
+There are no official implementations planned for Vulkan, Metal or Direct3D, since [`wgpu`] can be implemented over all of these APIs, therefore [`piet-wgpu`] can be used for all of them. Please open an issue if you think an important graphics API is missing!
 
 [`piet`]: https://crates.io/crates/piet
 [`piet-hardware`]: ./crates/piet-hardware/README.md
 [`piet-glow`]: ./crates/piet-glow/README.md
+[`piet-wgpu`]: ./crates/piet-wgpu/README.md
 [`glow`]: https://crates.io/crates/glow
 [`wgpu`]: https://crates.io/crates/wgpu
-[`vulkano`]: https://crates.io/crates/vulkano
 
 ## License
 
