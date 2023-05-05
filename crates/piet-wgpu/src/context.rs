@@ -43,10 +43,10 @@ pub(crate) struct GpuContext<DaQ: ?Sized> {
     /// The rendering pipeline.
     pipeline: wgpu::RenderPipeline,
 
-    /// The uniform buffer.
+    /// A buffer for uniforms.
     uniform_buffer: wgpu::Buffer,
 
-    /// Bind group for uniforms.
+    /// The bind group for uniforms.
     uniform_bind_group: wgpu::BindGroup,
 
     /// Bind group for textures.
@@ -129,8 +129,11 @@ struct Uniforms {
     /// Viewport size.
     viewport_size: [f32; 2],
 
+    /// Padding.
+    pad: [u32; 2],
+
     /// 3x3 transformation matrix.
-    transform: [[f32; 3]; 3],
+    transform: [[f32; 4]; 3],
 }
 
 impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
@@ -153,7 +156,12 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
 
         let uniform_data = {
             let mut uniform_data = bytemuck::bytes_of(&Uniforms {
-                transform: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                transform: [
+                    [0.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0],
+                ],
+                pad: [0xFFFFFFFF; 2],
                 viewport_size: [0.0, 0.0],
             })
             .to_vec();
@@ -164,13 +172,15 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
             uniform_data
         };
 
-        // Create a buffer for the uniforms.
+        // Create a buffer for uniforms.
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("piet-wgpu uniform buffer"),
             contents: &uniform_data,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        let uniform_buffer_layout =
+
+        // Create a buffer layout for the uniforms.
+        let uniform_bind_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("piet-wgpu uniform buffer layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
@@ -188,14 +198,10 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
             });
         let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("piet-wgpu uniform bind group"),
-            layout: &uniform_buffer_layout,
+            layout: &uniform_bind_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &uniform_buffer,
-                    offset: 0,
-                    size: None,
-                }),
+                resource: uniform_buffer.as_entire_binding(),
             }],
         });
 
@@ -227,7 +233,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("piet-wgpu pipeline layout"),
             bind_group_layouts: &[
-                &uniform_buffer_layout,
+                &uniform_bind_layout,
                 &texture_buffer_layout,
                 &texture_buffer_layout,
             ],
@@ -303,8 +309,8 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
         Self {
             device_and_queue,
             pipeline,
-            uniform_buffer,
             uniform_bind_group,
+            uniform_buffer,
             texture_bind_layout: texture_buffer_layout,
             clear_color: Cell::new(None),
             texture_view: RefCell::new(None),
@@ -412,6 +418,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
             // Set the uniforms.
             let uniforms = Uniforms {
                 transform: affine_to_column_major(transform),
+                pad: [0xFFFFFFFF; 2],
                 viewport_size: [*width, *height],
             };
             self.device_and_queue.queue().write_buffer(
@@ -561,13 +568,13 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
     }
 }
 
-fn affine_to_column_major(affine: &Affine) -> [[f32; 3]; 3] {
+fn affine_to_column_major(affine: &Affine) -> [[f32; 4]; 3] {
     let [a, b, c, d, e, f] = affine.as_coeffs();
 
     // Column major
     [
-        [a as f32, c as f32, 0.0],
-        [b as f32, d as f32, 0.0],
-        [e as f32, f as f32, 1.0],
+        [a as f32, b as f32, 0.0, 0.0],
+        [c as f32, d as f32, 0.0, 0.0],
+        [e as f32, f as f32, 1.0, 0.0],
     ]
 }

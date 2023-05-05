@@ -25,8 +25,8 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::WindowBuilder;
 
-use piet_hardware::piet::kurbo::{Affine, BezPath, Point, Rect};
-use piet_hardware::piet::{self, RenderContext as _};
+use piet_hardware::piet::kurbo::{Affine, BezPath, Point, Rect, Vec2};
+use piet_hardware::piet::{self, GradientStop, RenderContext as _};
 use piet_wgpu::{RenderContext, WgpuContext};
 
 const ORANGES: &[u8] = include_bytes!("../../piet-glow/examples/assets/oranges.jpg");
@@ -53,6 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Drawing function.
     let mut solid_olive = None;
+    let mut radial_gradient = None;
     let mut outline = None;
     let mut image = None;
 
@@ -76,6 +77,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Draw a black outline using the path.
         let outline = outline.get_or_insert_with(|| rc.solid_brush(piet::Color::BLACK));
         rc.stroke(&red_star, outline, 5.0);
+
+        // Test the transform.
+        rc.with_save(|rc| {
+            let rot = ((tick * 2) % 360) as f64 / 180.0 * std::f64::consts::PI;
+            let trans = Affine::translate((600.0, 200.0))
+                * Affine::rotate(rot)
+                * Affine::scale_non_uniform(0.75, 0.75);
+            let gradient = radial_gradient.get_or_insert_with(|| {
+                let grad = piet::FixedRadialGradient {
+                    center: Point::new(0.0, 0.0),
+                    origin_offset: Vec2::new(0.0, 0.0),
+                    radius: 150.0,
+                    stops: vec![
+                        GradientStop {
+                            pos: 0.0,
+                            color: piet::Color::LIME,
+                        },
+                        GradientStop {
+                            pos: 0.5,
+                            color: piet::Color::MAROON,
+                        },
+                        GradientStop {
+                            pos: 1.0,
+                            color: piet::Color::NAVY,
+                        },
+                    ],
+                };
+
+                rc.gradient(grad).unwrap()
+            });
+
+            rc.transform(trans);
+            rc.fill(&star, gradient);
+            rc.stroke(&star, outline, 5.0);
+
+            Ok(())
+        })
+        .unwrap();
 
         // Create an image and draw it.
         let image = image.get_or_insert_with(|| {

@@ -23,6 +23,9 @@ struct Uniforms {
     // Viewport size.
     viewport_size: vec2<f32>,
 
+    // 64-byte padding.
+    padding: vec2<u32>,
+
     // 3x3 matrix for transforming vertices.
     transform: mat3x3<f32>,
 };
@@ -69,8 +72,7 @@ fn vertex_main(vert: InVertex) -> VertexShaderOutput {
     var out: VertexShaderOutput;
 
     // Transform the vertex position.
-    // TODO: Transform
-    var pos: vec3<f32> = vec3<f32>(vert.position, 1.0);
+    var pos: vec3<f32> = uniforms.transform * vec3<f32>(vert.position, 1.0);
     pos = pos / pos.z;
 
     out.position = unpack_position(pos.xy);
