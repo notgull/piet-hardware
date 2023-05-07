@@ -24,7 +24,6 @@
 use super::{DeviceAndQueue, GpuContext};
 
 use std::cell::{Ref, RefCell, RefMut};
-use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use piet_hardware::piet::{Color, ImageFormat, InterpolationMode};
@@ -186,8 +185,8 @@ impl BorrowedTextureMut<'_> {
         // Queue a data write to the texture.
         let data_layout = wgpu::ImageDataLayout {
             offset: 0,
-            bytes_per_row: NonZeroU32::new(size.width * bytes_per_pixel),
-            rows_per_image: NonZeroU32::new(size.height),
+            bytes_per_row: Some(size.width * bytes_per_pixel),
+            rows_per_image: Some(size.height),
         };
         base.device_and_queue().queue().write_texture(
             wgpu::ImageCopyTexture {
@@ -232,8 +231,8 @@ impl BorrowedTextureMut<'_> {
             data,
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: NonZeroU32::new(size.0 * bytes_per_pixel),
-                rows_per_image: NonZeroU32::new(size.1),
+                bytes_per_row: Some(size.0 * bytes_per_pixel),
+                rows_per_image: Some(size.1),
             },
             wgpu::Extent3d {
                 width: size.0,
