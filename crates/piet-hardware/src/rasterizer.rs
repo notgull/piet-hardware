@@ -200,7 +200,7 @@ impl Rasterizer {
 }
 
 /// A rectangle to be tessellated.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct TessRect {
     /// The rectangle to be tessellated.
     pub(crate) pos: Rect,
