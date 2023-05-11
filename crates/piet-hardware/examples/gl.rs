@@ -836,7 +836,7 @@ impl piet_hardware::GpuContext for GlContext {
         }
     }
 
-    unsafe fn write_vertices(
+    fn write_vertices(
         &self,
         buffer: &Self::VertexBuffer,
         vertices: &[piet_hardware::Vertex],

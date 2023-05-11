@@ -88,15 +88,9 @@ pub trait GpuContext {
 
     /// Write vertices to a vertex buffer.
     ///
-    /// # Safety
-    ///
-    /// The indices must be valid for the given vertices.
-    unsafe fn write_vertices(
-        &self,
-        buffer: &Self::VertexBuffer,
-        vertices: &[Vertex],
-        indices: &[u32],
-    );
+    /// The indices must be valid for the vertices set; however, it is up to the GPU implementation
+    /// to actually check this.
+    fn write_vertices(&self, buffer: &Self::VertexBuffer, vertices: &[Vertex], indices: &[u32]);
 
     /// Push buffer data to the GPU.
     fn push_buffers(

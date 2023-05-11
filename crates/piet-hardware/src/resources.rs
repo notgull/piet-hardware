@@ -193,7 +193,7 @@ impl<C: GpuContext + ?Sized> VertexBuffer<C> {
         Ok(Self::from_raw(context, resource))
     }
 
-    pub(crate) unsafe fn upload(&self, data: &[Vertex], indices: &[u32]) {
+    pub(crate) fn upload(&self, data: &[Vertex], indices: &[u32]) {
         self.context.write_vertices(self.resource(), data, indices)
     }
 }
