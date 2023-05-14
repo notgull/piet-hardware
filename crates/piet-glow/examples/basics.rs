@@ -20,7 +20,10 @@
 include!("util/setup_context.rs");
 
 use piet::kurbo::{Affine, BezPath, Point, Rect, Vec2};
-use piet::{FontFamily, GradientStop, RenderContext as _, Text, TextLayout, TextLayoutBuilder};
+use piet::{
+    FontFamily, GradientStop, RenderContext as _, Text, TextAttribute, TextLayout,
+    TextLayoutBuilder,
+};
 
 use instant::{Duration, Instant};
 
@@ -167,6 +170,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .new_text_layout(fps_string)
                     .font(FontFamily::SERIF, 24.0)
                     .text_color(piet::Color::rgb8(0x11, 0x22, 0x22))
+                    .default_attribute(TextAttribute::Underline(true))
                     .build()
                     .unwrap();
 
