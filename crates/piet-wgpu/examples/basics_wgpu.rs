@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut current_fps = None;
 
     let mut draw = move |rc: &mut RenderContext<'_, _>, width, height| {
-        rc.clear(None, piet::Color::rgb8(0x87, 0xce, 0xeb));
+        rc.clear(None, piet::Color::rgb8(0x87, 0xCE, 0xEB));
 
         let red_star = {
             let rot = (tick % 360) as f64 / 180.0 * std::f64::consts::PI;
@@ -203,7 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut state = None;
-    let format = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let format = wgpu::TextureFormat::Bgra8Unorm;
     let mut config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format,

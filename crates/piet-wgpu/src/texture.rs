@@ -153,12 +153,12 @@ impl BorrowedTextureMut<'_> {
                         format: match format {
                             ImageFormat::Grayscale => wgpu::TextureFormat::R8Unorm,
                             ImageFormat::Rgb => panic!("Unsupported"),
-                            ImageFormat::RgbaPremul => wgpu::TextureFormat::Rgba8UnormSrgb,
-                            ImageFormat::RgbaSeparate => wgpu::TextureFormat::Rgba8UnormSrgb,
+                            ImageFormat::RgbaPremul => wgpu::TextureFormat::Rgba8Unorm,
+                            ImageFormat::RgbaSeparate => wgpu::TextureFormat::Rgba8Unorm,
                             _ => panic!("Unsupported"),
                         },
                         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[wgpu::TextureFormat::Rgba8UnormSrgb],
+                        view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
                     });
 
             self.0.format = format;
