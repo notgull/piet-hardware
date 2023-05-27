@@ -47,6 +47,7 @@ use winit::window::WindowBuilder;
 use std::cell::Cell;
 use std::ffi::CString;
 use std::fmt;
+use std::mem;
 use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
 
@@ -849,13 +850,13 @@ impl piet_hardware::GpuContext for GlContext {
             //gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, buffer.ebo);
             gl::BufferData(
                 gl::ARRAY_BUFFER,
-                (vertices.len() * std::mem::size_of::<piet_hardware::Vertex>()) as _,
+                mem::size_of_val(vertices) as _,
                 vertices.as_ptr() as *const _,
                 gl::DYNAMIC_DRAW,
             );
             gl::BufferData(
                 gl::ELEMENT_ARRAY_BUFFER,
-                (indices.len() * std::mem::size_of::<u32>()) as _,
+                mem::size_of_val(indices) as _,
                 indices.as_ptr() as *const _,
                 gl::DYNAMIC_DRAW,
             );
