@@ -579,7 +579,15 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
     }
 
     fn save(&mut self) -> Result<(), Pierror> {
-        self.state.push(Default::default());
+        let current_state = self.state.last().expect("Impossible lack of RenderState");
+
+        // incorrectly only clone the transform, not the mask texture
+        let new_state = RenderState {
+            transform: current_state.transform.clone(),
+            mask: MaskSlot::default(),
+        };
+        self.state.push(new_state);
+
         Ok(())
     }
 
