@@ -21,10 +21,12 @@
 
 //! The rasterizer, powered by `lyon_tessellation`.
 
+use super::dash::DashBuffer;
 use super::gpu_backend::Vertex;
 use super::ResultExt;
 
 use arrayvec::ArrayVec;
+use std::mem;
 
 use lyon_tessellation::path::{Event, PathEvent};
 use lyon_tessellation::{
@@ -44,6 +46,9 @@ pub(crate) struct Rasterizer {
 
     /// The stroke tessellator.
     stroke_tessellator: StrokeTessellator,
+
+    /// The buffer used to calculate dashed paths.
+    dash_buffer: DashBuffer,
 }
 
 impl Rasterizer {
@@ -53,6 +58,7 @@ impl Rasterizer {
             buffers: VertexBuffers::new(),
             fill_tessellator: FillTessellator::new(),
             stroke_tessellator: StrokeTessellator::new(),
+            dash_buffer: DashBuffer::new(),
         }
     }
 
@@ -155,10 +161,26 @@ impl Rasterizer {
         width: f64,
         style: &piet::StrokeStyle,
         cvt_vertex: impl Fn(StrokeVertex<'_, '_>) -> Vertex,
+        cvt_fill_vertex: impl Fn(FillVertex<'_>) -> Vertex,
     ) -> Result<(), Pierror> {
-        // TODO: Support dashing.
+        // lyon_tesselation does not support dashing. If this is a dashed path, use zeno instead
+        // to calculate the path fill.
         if !style.dash_pattern.is_empty() {
-            return Err(Pierror::NotSupported);
+            self.dash_buffer
+                .write_stroke(shape, width, style, tolerance);
+
+            let output = mem::take(&mut self.dash_buffer.output);
+            let result = self.fill_shape(
+                &output,
+                self.dash_buffer.fill_rule,
+                tolerance,
+                cvt_fill_vertex,
+            );
+
+            // Preserve the output buffer's memory.
+            self.dash_buffer.output = output;
+
+            return result;
         }
 
         // Create a new buffers builder.

@@ -62,6 +62,7 @@ use std::rc::Rc;
 
 mod atlas;
 mod brush;
+mod dash;
 mod gpu_backend;
 mod image;
 mod mask;
@@ -267,6 +268,10 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
             self.tolerance,
             width,
             style,
+            |vert| {
+                let pos = vert.position();
+                brush.make_vertex(pos.into())
+            },
             |vert| {
                 let pos = vert.position();
                 brush.make_vertex(pos.into())
