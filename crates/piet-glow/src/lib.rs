@@ -250,6 +250,9 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
             assert_eq!(data.len(), total_len);
         }
 
+        let grayscale_data;
+        let mut data = data;
+
         unsafe {
             self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
             let _guard = CallOnDrop(|| {
@@ -257,7 +260,14 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
             });
 
             let (internal_format, format, data_type) = match format {
-                piet::ImageFormat::Grayscale => (glow::R8, glow::RED, glow::UNSIGNED_BYTE),
+                piet::ImageFormat::Grayscale => {
+                    // TODO: Figure out the best way of working around grayscale being broken.
+                    grayscale_data =
+                        data.map(|data| data.iter().flat_map(|&v| [v, v, v]).collect::<Vec<_>>());
+                    data = grayscale_data.as_deref();
+
+                    (glow::RGB8, glow::RGB, glow::UNSIGNED_BYTE)
+                }
                 piet::ImageFormat::Rgb => (glow::RGB8, glow::RGB, glow::UNSIGNED_BYTE),
                 piet::ImageFormat::RgbaPremul => (glow::RGBA8, glow::RGBA, glow::UNSIGNED_BYTE),
                 piet::ImageFormat::RgbaSeparate => (glow::RGBA8, glow::RGBA, glow::UNSIGNED_BYTE),
