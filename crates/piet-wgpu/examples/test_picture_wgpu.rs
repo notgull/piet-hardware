@@ -65,8 +65,7 @@ async fn entry() -> ! {
                 let size = picture.size();
 
                 // Create a texture to render into.
-                let aligned_width = (size.width as u32 + wgpu::COPY_BYTES_PER_ROW_ALIGNMENT - 1)
-                    & !(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT - 1);
+                let dims = BufferDimensions::new(size.width as _, size.height as _);
                 let texture =
                     context
                         .device_and_queue()
@@ -74,8 +73,8 @@ async fn entry() -> ! {
                         .create_texture(&wgpu::TextureDescriptor {
                             label: None,
                             size: wgpu::Extent3d {
-                                width: aligned_width,
-                                height: size.height as u32,
+                                width: dims.width as _,
+                                height: dims.height as _,
                                 depth_or_array_layers: 1,
                             },
                             mip_level_count: 1,
@@ -94,14 +93,14 @@ async fn entry() -> ! {
                     .0
                     .create_buffer(&wgpu::BufferDescriptor {
                         label: None,
-                        size: (aligned_width * size.height as u32 * 4) as u64,
+                        size: (dims.padded_bytes_per_row * dims.height) as _,
                         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                         mapped_at_creation: false,
                     });
 
                 // Create the render context.
                 let mut rc =
-                    context.render_context(texture_view, aligned_width, size.height as u32);
+                    context.render_context(texture_view, dims.width as _, dims.height as _);
 
                 // Draw the picture.
                 picture.draw(&mut rc)?;
@@ -110,32 +109,29 @@ async fn entry() -> ! {
                 let mut encoder = context
                     .device_and_queue()
                     .0
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: None,
+                    });
 
                 encoder.copy_texture_to_buffer(
-                    wgpu::ImageCopyTexture {
-                        texture: &texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
+                    texture.as_image_copy(),
                     wgpu::ImageCopyBuffer {
                         buffer: &buffer,
                         layout: wgpu::ImageDataLayout {
                             offset: 0,
-                            bytes_per_row: Some(aligned_width * 4),
-                            rows_per_image: Some(size.height as u32),
+                            bytes_per_row: Some(dims.padded_bytes_per_row as u32),
+                            rows_per_image: None,
                         },
                     },
                     wgpu::Extent3d {
-                        width: size.width as u32,
-                        height: size.height as u32,
+                        width: dims.width as _,
+                        height: dims.height as _,
                         depth_or_array_layers: 1,
                     },
                 );
 
                 // Map the buffer and read the data.
-                context
+                let index = context
                     .device_and_queue()
                     .1
                     .submit(std::iter::once(encoder.finish()));
@@ -145,20 +141,28 @@ async fn entry() -> ! {
                     res.unwrap();
                     send.send(()).unwrap();
                 });
-                context.device_and_queue().0.poll(wgpu::Maintain::Wait);
+                context.device_and_queue().0.poll(wgpu::Maintain::WaitForSubmissionIndex(index));
                 recv.recv().unwrap();
 
                 // Get the mapped range and read the data.
                 let range = buffer_slice.get_mapped_range();
+                let mut buf = range.to_vec();
+                for chunk in range.chunks(dims.padded_bytes_per_row) {
+                    buf.extend_from_slice(&chunk[..dims.unpadded_bytes_per_row]);
+                }
+
                 let img = image::RgbaImage::from_raw(
-                    size.width as u32,
-                    size.height as u32,
-                    range.to_vec(),
+                    dims.width as u32,
+                    dims.height as u32,
+                    buf
                 )
                 .unwrap();
 
                 // Save the image.
                 img.save(path).unwrap();
+
+                drop(range);
+                buffer.unmap();
 
                 Ok(())
             })
@@ -170,4 +174,27 @@ async fn entry() -> ! {
 
 fn main() -> ! {
     futures_lite::future::block_on(entry())
+}
+
+struct BufferDimensions {
+    width: usize,
+    height: usize,
+    unpadded_bytes_per_row: usize,
+    padded_bytes_per_row: usize,
+}
+
+impl BufferDimensions {
+    fn new(width: usize, height: usize) -> Self {
+        let bytes_per_pixel = std::mem::size_of::<u32>();
+        let unpadded_bytes_per_row = width * bytes_per_pixel;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+        let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
+        let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
+        Self {
+            width,
+            height,
+            unpadded_bytes_per_row,
+            padded_bytes_per_row,
+        }
+    }
 }
