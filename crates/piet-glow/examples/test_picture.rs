@@ -98,7 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         };
 
                         // Use a framebuffer to render into the texture and make it current.
-                        let _framebuffer = unsafe {
+                        let framebuffer = unsafe {
                             let framebuffer = ctx.create_framebuffer().unwrap();
                             ctx.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
                             ctx.framebuffer_texture_2d(
@@ -119,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         };
 
                         // Use a renderbuffer to render into the texture and make it current.
-                        let _renderbuffer = unsafe {
+                        let renderbuffer = unsafe {
                             let renderbuffer = ctx.create_renderbuffer().unwrap();
                             ctx.bind_renderbuffer(glow::RENDERBUFFER, Some(renderbuffer));
                             ctx.renderbuffer_storage(
@@ -180,8 +180,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Delete the texture and framebuffer.
                         unsafe {
                             ctx.delete_texture(texture);
-                            ctx.delete_framebuffer(_framebuffer);
-                            ctx.delete_renderbuffer(_renderbuffer);
+                            ctx.delete_framebuffer(framebuffer);
+                            ctx.delete_renderbuffer(renderbuffer);
                         }
 
                         Ok(())

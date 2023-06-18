@@ -579,7 +579,10 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
     }
 
     fn save(&mut self) -> Result<(), Pierror> {
-        self.state.push(Default::default());
+        self.state.push(RenderState {
+            transform: self.state.last().unwrap().transform,
+            mask: MaskSlot::new(),
+        });
         Ok(())
     }
 
