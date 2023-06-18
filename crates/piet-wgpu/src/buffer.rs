@@ -20,6 +20,14 @@
 // Public License along with `piet-hardware`. If not, see <https://www.gnu.org/licenses/>.
 
 //! A wrapper around the WGPU buffers.
+//!
+//! You might notice that we use a scheme where we set up a chain of buffers and make sure writes
+//! don't overlap, rather than just using one buffer. Don't worry, this is normal! Since buffer
+//! writes are asynchronous, we need to make sure that we don't write to the same buffer while
+//! it's still being used by the GPU. Therefore we use extra buffers to make sure that we don't
+//! step on any toes.
+//!
+//! This system is far from elegant. Any suggestions for improvement are welcome!
 
 use super::{DeviceAndQueue, GpuContext};
 use piet_hardware::Vertex;

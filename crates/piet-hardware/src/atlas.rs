@@ -182,7 +182,10 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                                 *buf = color;
                             });
                     }
-                    _ => return Err(Pierror::NotSupported),
+                    content => {
+                        tracing::warn!("Unsupported swash content: {:?}", content);
+                        return Err(Pierror::NotSupported);
+                    }
                 }
 
                 let (width, height) = (sw_image.placement.width, sw_image.placement.height);

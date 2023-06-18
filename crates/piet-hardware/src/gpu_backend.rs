@@ -92,6 +92,14 @@ pub trait GpuContext {
     /// to actually check this.
     fn write_vertices(&self, buffer: &Self::VertexBuffer, vertices: &[Vertex], indices: &[u32]);
 
+    /// Capture an area from the screen and put it into a texture.
+    fn capture_area(
+        &self,
+        texture: &Self::Texture,
+        offset: (u32, u32),
+        size: (u32, u32),
+    ) -> Result<(), Self::Error>;
+
     /// Push buffer data to the GPU.
     fn push_buffers(
         &self,

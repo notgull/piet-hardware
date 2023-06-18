@@ -27,7 +27,7 @@ use super::DeviceAndQueue;
 
 use std::cell::{Cell, Ref, RefCell};
 use std::collections::hash_map::{Entry, HashMap};
-use std::convert::Infallible;
+use std::fmt;
 use std::mem;
 use std::num::NonZeroU64;
 use std::rc::Rc;
@@ -143,6 +143,17 @@ struct Uniforms {
 }
 
 type UniformBytes = [u8; mem::size_of::<Uniforms>()];
+
+#[derive(Debug)]
+pub(crate) struct NotYetSupported;
+
+impl fmt::Display for NotYetSupported {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "not yet supported")
+    }
+}
+
+impl std::error::Error for NotYetSupported {}
 
 impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
     /// Create a new GPU context.
@@ -318,7 +329,7 @@ impl<DaQ: DeviceAndQueue + ?Sized> GpuContext<DaQ> {
 impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ> {
     type Texture = WgpuTexture;
     type VertexBuffer = WgpuVertexBuffer;
-    type Error = Infallible;
+    type Error = NotYetSupported;
 
     fn clear(&self, color: piet_hardware::piet::Color) {
         // Set the inner clear color.
@@ -473,6 +484,16 @@ impl<DaQ: DeviceAndQueue + ?Sized> piet_hardware::GpuContext for GpuContext<DaQ>
         texture
             .borrow_mut()
             .set_texture_interpolation(self, interpolation)
+    }
+
+    fn capture_area(
+        &self,
+        _texture: &Self::Texture,
+        _offset: (u32, u32),
+        _size: (u32, u32),
+    ) -> Result<(), Self::Error> {
+        // TODO: This is hard on wgpu! Look into this later.
+        Err(NotYetSupported)
     }
 
     fn max_texture_size(&self) -> (u32, u32) {

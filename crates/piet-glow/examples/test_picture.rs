@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let context = guard.as_mut().unwrap();
 
                         // Uses unimplemented bits.
-                        if [12, 16].contains(&number) {
+                        if number == 12 {
                             return Ok(());
                         }
 
