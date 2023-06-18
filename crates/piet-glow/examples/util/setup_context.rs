@@ -330,7 +330,7 @@ pub(crate) mod glutin_impl {
         GlutinSetup::new(&event_loop)?.run(event_loop, f)
     }
 
-    #[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
+    #[cfg(not(target_vendor = "apple"))]
     fn debug_message_callback(source: u32, ty: u32, id: u32, severity: u32, message: &str) {
         let source = match source {
             glow::DEBUG_SOURCE_API => "API",
