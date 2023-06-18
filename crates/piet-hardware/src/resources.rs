@@ -145,14 +145,12 @@ impl<C: GpuContext + ?Sized> Texture<C> {
             shader,
             ..Default::default()
         };
-        pixmap
-            .fill_rect(
-                tiny_skia::Rect::from_xywh(0.0, 0.0, size.width as _, size.height as _).unwrap(),
-                &paint,
-                tiny_skia::Transform::identity(),
-                None,
-            )
-            .expect("failed to render shader");
+        pixmap.fill_rect(
+            tiny_skia::Rect::from_xywh(0.0, 0.0, size.width as _, size.height as _).unwrap(),
+            &paint,
+            tiny_skia::Transform::identity(),
+            None,
+        );
 
         // Write the pixmap into the texture.
         let data = pixmap.take();

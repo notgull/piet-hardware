@@ -49,7 +49,7 @@ pub use piet;
 
 use lyon_tessellation::FillRule;
 
-use piet::kurbo::{Affine, Point, Rect, Shape, Size};
+use piet::kurbo::{Affine, PathEl, Point, Rect, Shape, Size};
 use piet::{Error as Pierror, FixedGradient, Image as _, InterpolationMode};
 
 use piet_cosmic_text::Metadata;
@@ -798,3 +798,23 @@ impl<E: fmt::Display> fmt::Display for LibraryError<E> {
 }
 
 impl<E: StdError> StdError for LibraryError<E> {}
+
+/// Convert a `piet::Shape` to a `tiny_skia` path.
+fn shape_to_skia_path(builder: &mut tiny_skia::PathBuilder, shape: impl Shape, tolerance: f64) {
+    shape.path_elements(tolerance).for_each(|el| match el {
+        PathEl::MoveTo(pt) => builder.move_to(pt.x as f32, pt.y as f32),
+        PathEl::LineTo(pt) => builder.line_to(pt.x as f32, pt.y as f32),
+        PathEl::QuadTo(p1, p2) => {
+            builder.quad_to(p1.x as f32, p1.y as f32, p2.x as f32, p2.y as f32)
+        }
+        PathEl::CurveTo(p1, p2, p3) => builder.cubic_to(
+            p1.x as f32,
+            p1.y as f32,
+            p2.x as f32,
+            p2.y as f32,
+            p3.x as f32,
+            p3.y as f32,
+        ),
+        PathEl::ClosePath => builder.close(),
+    })
+}

@@ -23,15 +23,15 @@
 
 use super::gpu_backend::{GpuContext, RepeatStrategy};
 use super::resources::Texture;
-use super::ResultExt;
+use super::{shape_to_skia_path, ResultExt};
 
-use piet::kurbo::{Affine, PathEl, Shape};
+use piet::kurbo::{Affine, Shape};
 use piet::{Error as Pierror, InterpolationMode};
 
 use std::mem;
 use std::rc::Rc;
 
-use tiny_skia::{ClipMask, FillRule, PathBuilder, Pixmap};
+use tiny_skia::{FillRule, Mask as ClipMask, PathBuilder, Pixmap};
 
 /// A wrapper around an `Option<Mask>` that supports being easily drawn into.
 pub(crate) struct MaskSlot<C: GpuContext + ?Sized> {
@@ -84,20 +84,21 @@ impl<C: GpuContext + ?Sized> MaskSlot<C> {
         transform: Affine,
         (width, height): (u32, u32),
     ) -> Result<(), Pierror> {
-        // TODO: There has to be a better way of doing this.
         let path = {
-            let path = shape.into_path(tolerance);
-            let transformed = transform * path;
-
             let mut builder = mem::take(&mut self.path_builder);
-            shape_to_skia_path(&mut builder, transformed, tolerance);
+            shape_to_skia_path(&mut builder, shape, tolerance);
             builder.finish().expect("path builder failed")
         };
 
         match self.slot {
             MaskSlotState::Mask(ref mut mask) => {
                 // Intersect the new path with the existing mask.
-                mask.mask.intersect_path(&path, FillRule::EvenOdd, false);
+                mask.mask.intersect_path(
+                    &path,
+                    FillRule::EvenOdd,
+                    false,
+                    tiny_skia::Transform::identity(),
+                );
                 mask.dirty = true;
             }
 
@@ -116,13 +117,12 @@ impl<C: GpuContext + ?Sized> MaskSlot<C> {
                 let mut mask = Mask {
                     texture,
                     pixmap: Pixmap::new(width, height).unwrap(),
-                    mask: ClipMask::new(),
+                    mask: ClipMask::new(width, height).unwrap(),
                     dirty: true,
                 };
 
                 mask.mask
-                    .set_path(width, height, &path, FillRule::EvenOdd, false)
-                    .ok_or_else(|| Pierror::BackendError("Failed to set clipping path".into()))?;
+                    .fill_path(&path, FillRule::EvenOdd, false, cvt_transform(transform));
 
                 self.slot = MaskSlotState::Mask(mask);
             }
@@ -150,7 +150,7 @@ struct Mask<C: GpuContext + ?Sized> {
     pixmap: tiny_skia::Pixmap,
 
     /// The clipping mask we use to calculate the mask.
-    mask: tiny_skia::ClipMask,
+    mask: ClipMask,
 
     /// Whether the mask contains data that needs to be uploaded to the texture.
     dirty: bool,
@@ -199,21 +199,13 @@ impl<C: GpuContext + ?Sized> Mask<C> {
     }
 }
 
-fn shape_to_skia_path(builder: &mut PathBuilder, shape: impl Shape, tolerance: f64) {
-    shape.path_elements(tolerance).for_each(|el| match el {
-        PathEl::MoveTo(pt) => builder.move_to(pt.x as f32, pt.y as f32),
-        PathEl::LineTo(pt) => builder.line_to(pt.x as f32, pt.y as f32),
-        PathEl::QuadTo(p1, p2) => {
-            builder.quad_to(p1.x as f32, p1.y as f32, p2.x as f32, p2.y as f32)
-        }
-        PathEl::CurveTo(p1, p2, p3) => builder.cubic_to(
-            p1.x as f32,
-            p1.y as f32,
-            p2.x as f32,
-            p2.y as f32,
-            p3.x as f32,
-            p3.y as f32,
-        ),
-        PathEl::ClosePath => builder.close(),
-    })
+fn cvt_transform(p: kurbo::Affine) -> tiny_skia::Transform {
+    tiny_skia::Transform::from_row(
+        p.as_coeffs()[0] as f32,
+        p.as_coeffs()[1] as f32,
+        p.as_coeffs()[2] as f32,
+        p.as_coeffs()[3] as f32,
+        p.as_coeffs()[4] as f32,
+        p.as_coeffs()[5] as f32,
+    )
 }
