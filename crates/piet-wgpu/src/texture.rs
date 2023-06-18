@@ -126,6 +126,9 @@ impl BorrowedTextureMut<'_> {
         let data_len = data.map_or(0, |d| d.len());
         tracing::debug!(?size, ?format, %data_len, "Writing a texture");
 
+        let formatted_buffer;
+        let mut data = data;
+
         // Get the texture to write to.
         let texture = if self.0.texture.is_none() || self.0.format != format {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -135,8 +138,35 @@ impl BorrowedTextureMut<'_> {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: match format {
-                    ImageFormat::Grayscale => wgpu::TextureFormat::R8Unorm,
-                    ImageFormat::Rgb => panic!("Unsupported"),
+                    ImageFormat::Grayscale => {
+                                // TODO: Improve grayscale support here.
+                                formatted_buffer = data.map(|d| {
+                                    let mut buffer = Vec::with_capacity(d.len() * 4);
+                                    for &byte in d {
+                                        buffer.push(byte);
+                                        buffer.push(byte);
+                                        buffer.push(byte);
+                                        buffer.push(255);
+                                    }
+                                    buffer
+                                });
+                                data = formatted_buffer.as_deref();
+
+                                wgpu::TextureFormat::Rgba8Unorm
+                            }
+                    ImageFormat::Rgb => {
+                                // TODO: Improve RGB support here.
+                                formatted_buffer = data.map(|d| {
+                                    let mut buffer = Vec::with_capacity(d.len() * 4);
+                                    buffer.extend(d.chunks(3).flat_map(|chunk| {
+                                        chunk.iter().copied().chain(std::iter::once(255))
+                                    }));
+                                    buffer
+                                });
+                                data = formatted_buffer.as_deref();
+
+                                wgpu::TextureFormat::Rgba8Unorm
+                            }
                     ImageFormat::RgbaPremul => wgpu::TextureFormat::Rgba8Unorm,
                     ImageFormat::RgbaSeparate => wgpu::TextureFormat::Rgba8Unorm,
                     _ => panic!("Unsupported"),
@@ -319,9 +349,10 @@ impl TextureInner {
 }
 
 fn bytes_per_pixel(format: ImageFormat) -> u32 {
+    // TODO: We just use RGBA formatting for now.
     match format {
-        ImageFormat::Grayscale => 1u32,
-        ImageFormat::Rgb => 3,
+        ImageFormat::Grayscale => 4u32,
+        ImageFormat::Rgb => 4,
         ImageFormat::RgbaPremul => 4,
         ImageFormat::RgbaSeparate => 4,
         _ => panic!("Unsupported"),
