@@ -17,7 +17,8 @@
 
 //! An example with a basic usage of the library.
 
-include!("util/setup_context.rs");
+#[path = "util/setup_context.rs"]
+mod util;
 
 use piet::kurbo::{Affine, BezPath, Point, Rect, Vec2};
 use piet::{
