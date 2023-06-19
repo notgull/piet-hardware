@@ -45,10 +45,10 @@
 
 use cosmic_text::LayoutGlyph;
 use line_straddler::{LineGenerator, LineType};
-pub use piet;
 
 use lyon_tessellation::FillRule;
 
+pub use piet;
 use piet::kurbo::{Affine, PathEl, Point, Rect, Shape, Size};
 use piet::{Error as Pierror, FixedGradient, Image as _, InterpolationMode};
 
@@ -673,8 +673,31 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         }
     }
 
-    fn capture_image_area(&mut self, _src_rect: impl Into<Rect>) -> Result<Self::Image, Pierror> {
-        Err(Pierror::Unimplemented)
+    fn capture_image_area(&mut self, src_rect: impl Into<Rect>) -> Result<Self::Image, Pierror> {
+        let src_rect = src_rect.into();
+        let src_size = src_rect.size();
+
+        // Create a new texture to copy the image to.
+        let image = {
+            let texture = Texture::new(
+                &self.source.context,
+                InterpolationMode::Bilinear,
+                RepeatStrategy::Repeat,
+            )
+            .piet_err()?;
+
+            Image::new(texture, src_size)
+        };
+
+        // Capture the area in the texture.
+        let offset = (src_rect.x0 as u32, src_rect.y0 as u32);
+        let size = (src_size.width as u32, src_size.height as u32);
+        self.source
+            .context
+            .capture_area(image.texture().resource(), offset, size)
+            .piet_err()?;
+
+        Ok(image)
     }
 
     fn blurred_rect(
@@ -683,6 +706,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         _blur_radius: f64,
         _brush: &impl piet::IntoBrush<Self>,
     ) {
+        tracing::warn!("blurred_rect is not supported");
         self.status = Err(Pierror::NotSupported);
     }
 

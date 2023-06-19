@@ -370,6 +370,77 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
         }
     }
 
+    fn capture_area(
+        &self,
+        texture: &Self::Texture,
+        offset: (u32, u32),
+        size: (u32, u32),
+    ) -> Result<(), Self::Error> {
+        let (x, y) = offset;
+        let (width, height) = size;
+
+        // Create a buffer to hold the pixels.
+        // A little bit more at the end is allocated for the inversion.
+        let buffer_size = (width * (height + 1) * 4) as usize;
+        let mut pixels = vec![0u8; buffer_size];
+        let scratch_start = pixels.len() - (width * 4) as usize;
+
+        // Read the pixels, making sure to invert the y axis.
+        unsafe {
+            self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
+            let _guard = CallOnDrop(|| {
+                self.context.bind_texture(glow::TEXTURE_2D, None);
+            });
+
+            self.context.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
+            self.context.read_pixels(
+                x as i32,
+                y as i32,
+                width as i32,
+                height as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(&mut pixels),
+            );
+        }
+
+        gl_error(&self.context);
+
+        // Invert the y axis, making sure to use the little bit at the end of the buffer as
+        // temporary storage.
+        let stride = width as usize * 4;
+        for row in 0..(height / 2) as usize {
+            let top = row * stride;
+            let bottom = (height as usize - row - 1) * stride;
+
+            pixels.copy_within(top..top + stride, scratch_start);
+            pixels.copy_within(bottom..bottom + stride, top);
+            pixels.copy_within(scratch_start..scratch_start + stride, bottom);
+        }
+
+        // Upload the pixels to the texture.
+        unsafe {
+            self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
+            let _guard = CallOnDrop(|| {
+                self.context.bind_texture(glow::TEXTURE_2D, None);
+            });
+
+            self.context.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as _,
+                width as i32,
+                height as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                Some(&pixels),
+            );
+        }
+
+        Ok(())
+    }
+
     fn max_texture_size(&self) -> (u32, u32) {
         unsafe {
             let size = self.context.get_parameter_i32(glow::MAX_TEXTURE_SIZE);

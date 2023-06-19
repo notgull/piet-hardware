@@ -756,6 +756,59 @@ impl piet_hardware::GpuContext for GlContext {
         }
     }
 
+    fn capture_area(
+        &self,
+        texture: &Self::Texture,
+        offset: (u32, u32),
+        size: (u32, u32),
+    ) -> Result<(), Self::Error> {
+        // Use glReadPixels to read into the texture.
+        self.assert_context();
+
+        unsafe {
+            let (x, y) = offset;
+            let (width, height) = size;
+            let mut buffer = vec![0u8; (width * height * 4) as usize];
+
+            gl::ReadPixels(
+                x as _,
+                y as _,
+                width as _,
+                height as _,
+                gl::RGBA,
+                gl::UNSIGNED_BYTE,
+                buffer.as_mut_ptr() as *mut _,
+            );
+            gl_error();
+
+            // Flip the image.
+            let stride = width as usize * 4;
+            let mut row = vec![0u8; stride];
+            for i in 0..(height / 2) {
+                let top = i as usize;
+                let bottom = (height - i - 1) as usize;
+
+                let top_start = top * stride;
+                let bottom_start = bottom * stride;
+
+                row.copy_from_slice(&buffer[top_start..(top_start + stride)]);
+                buffer.copy_within(bottom_start..(bottom_start + stride), top_start);
+                buffer[bottom_start..(bottom_start + stride)].copy_from_slice(&row);
+            }
+
+            // Write the image to the texture.
+            self.write_subtexture(
+                texture,
+                offset,
+                size,
+                piet::ImageFormat::RgbaSeparate,
+                &buffer,
+            );
+        }
+
+        Ok(())
+    }
+
     fn max_texture_size(&self) -> (u32, u32) {
         self.assert_context();
 

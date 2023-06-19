@@ -2,6 +2,20 @@
 
 This log describes changes in the `piet-hardware`, `piet-glow` and `piet-wgpu` crates.
 
+## piet-glow UNRELEASED
+
+- Update to the newest `piet-hardware` version.
+
+## piet-wgpu UNRELEASED
+
+- Update to the newest `piet-hardware` version.
+
+## piet-hardware UNRELEASED
+
+- **Breaking:** Add the `capture_area` method for capturing an area of the screen.
+- Add support for dashed lines.
+- Fix some minor bugs.
+
 ## piet-wgpu 0.2.2
 
 - Set default texture color space to non-SRGB.
