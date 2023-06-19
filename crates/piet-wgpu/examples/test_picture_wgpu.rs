@@ -19,6 +19,7 @@
 
 use piet::samples;
 use std::cell::RefCell;
+use std::io::prelude::*;
 use std::sync::mpsc;
 
 async fn entry() -> ! {
@@ -39,22 +40,38 @@ async fn entry() -> ! {
         )
         .await
         .expect("Failed to create device");
-    let context = piet_wgpu::WgpuContext::new((device, queue), wgpu::TextureFormat::Rgba8Unorm, 1)
-        .expect("Failed to create piet context");
+    let context =
+        piet_wgpu::WgpuContext::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, None, 1);
 
     // Sigh...
+    struct WgpuState {
+        context: piet_wgpu::WgpuContext,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+    }
+
     std::thread_local! {
-        static DEVICE_AND_QUEUE: RefCell<Option<piet_wgpu::WgpuContext<(wgpu::Device, wgpu::Queue)>>>
+        static DEVICE_AND_QUEUE: RefCell<Option<WgpuState>>
             = RefCell::new(None);
     }
-    DEVICE_AND_QUEUE.with(move |slot| *slot.borrow_mut() = Some(context));
+    DEVICE_AND_QUEUE.with(move |slot| {
+        *slot.borrow_mut() = Some(WgpuState {
+            context,
+            device,
+            queue,
+        })
+    });
 
     // Call the samples main.
     samples::samples_main(
         |number, _scale, path| {
             DEVICE_AND_QUEUE.with(|daq| {
                 let mut guard = daq.borrow_mut();
-                let context = guard.as_mut().unwrap();
+                let state = guard.as_mut().unwrap();
+
+                let context = &mut state.context;
+                let device = &state.device;
+                let queue = &state.queue;
 
                 if number == 12 || number == 16 {
                     return Ok(());
@@ -66,53 +83,60 @@ async fn entry() -> ! {
 
                 // Create a texture to render into.
                 let dims = BufferDimensions::new(size.width as _, size.height as _);
-                let texture =
-                    context
-                        .device_and_queue()
-                        .0
-                        .create_texture(&wgpu::TextureDescriptor {
-                            label: None,
-                            size: wgpu::Extent3d {
-                                width: dims.width as _,
-                                height: dims.height as _,
-                                depth_or_array_layers: 1,
-                            },
-                            mip_level_count: 1,
-                            sample_count: 1,
-                            dimension: wgpu::TextureDimension::D2,
-                            format: wgpu::TextureFormat::Rgba8Unorm,
-                            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
-                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                                | wgpu::TextureUsages::COPY_SRC,
-                        });
+                println!("{dims:?}");
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: None,
+                    size: wgpu::Extent3d {
+                        width: dims.width as _,
+                        height: dims.height as _,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                });
                 let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
                 // Create a buffer to copy the texture into.
-                let buffer = context
-                    .device_and_queue()
-                    .0
-                    .create_buffer(&wgpu::BufferDescriptor {
-                        label: None,
-                        size: (dims.padded_bytes_per_row * dims.height) as _,
-                        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                        mapped_at_creation: false,
-                    });
+                let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: None,
+                    size: (dims.padded_bytes_per_row * dims.height) as _,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
 
                 // Create the render context.
-                let mut rc =
-                    context.render_context(texture_view, dims.width as _, dims.height as _);
+                let mut rc = context.prepare(device, queue, size.width as _, size.height as _);
 
                 // Draw the picture.
                 picture.draw(&mut rc)?;
 
-                // Copy the texture into the buffer.
-                let mut encoder = context
-                    .device_and_queue()
-                    .0
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                // Begin encoding commands.
+                let mut encoder =
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+                {
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: None,
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &texture_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: true,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
                     });
 
+                    // Render to the texture.
+                    context.render(&mut render_pass);
+                }
+
+                // Copy the texture into the buffer.
                 encoder.copy_texture_to_buffer(
                     texture.as_image_copy(),
                     wgpu::ImageCopyBuffer {
@@ -131,35 +155,37 @@ async fn entry() -> ! {
                 );
 
                 // Map the buffer and read the data.
-                let index = context
-                    .device_and_queue()
-                    .1
-                    .submit(std::iter::once(encoder.finish()));
+                let index = queue.submit(std::iter::once(encoder.finish()));
                 let buffer_slice = buffer.slice(..);
                 let (send, recv) = mpsc::channel();
                 buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
                     res.unwrap();
                     send.send(()).unwrap();
                 });
-                context.device_and_queue().0.poll(wgpu::Maintain::WaitForSubmissionIndex(index));
+                device.poll(wgpu::Maintain::WaitForSubmissionIndex(index));
                 recv.recv().unwrap();
 
                 // Get the mapped range and read the data.
                 let range = buffer_slice.get_mapped_range();
-                let mut buf = range.to_vec();
-                for chunk in range.chunks(dims.padded_bytes_per_row) {
-                    buf.extend_from_slice(&chunk[..dims.unpadded_bytes_per_row]);
-                }
-
-                let img = image::RgbaImage::from_raw(
+                let mut png_encoder = png::Encoder::new(
+                    std::fs::File::create(path).unwrap(),
                     dims.width as u32,
                     dims.height as u32,
-                    buf
-                )
-                .unwrap();
+                );
+                png_encoder.set_depth(png::BitDepth::Eight);
+                png_encoder.set_color(png::ColorType::Rgba);
+                let mut png_writer = png_encoder
+                    .write_header()
+                    .unwrap()
+                    .into_stream_writer_with_size(dims.unpadded_bytes_per_row)
+                    .unwrap();
 
-                // Save the image.
-                img.save(path).unwrap();
+                for chunk in range.chunks(dims.padded_bytes_per_row) {
+                    png_writer
+                        .write_all(&chunk[..dims.unpadded_bytes_per_row])
+                        .unwrap();
+                }
+                png_writer.finish().unwrap();
 
                 drop(range);
                 buffer.unmap();
@@ -176,6 +202,7 @@ fn main() -> ! {
     futures_lite::future::block_on(entry())
 }
 
+#[derive(Debug)]
 struct BufferDimensions {
     width: usize,
     height: usize,
