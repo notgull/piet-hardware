@@ -152,88 +152,89 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tick = 0;
 
     // Draw the window.
-    let mut draw = move |ctx: &mut piet_hardware::RenderContext<'_, GlContext>| {
-        ctx.clear(None, piet::Color::AQUA);
+    let mut draw =
+        move |ctx: &mut piet_hardware::RenderContext<'_, 'static, 'static, GlContext>| {
+            ctx.clear(None, piet::Color::AQUA);
 
-        let outline = outline.get_or_insert_with(|| ctx.solid_brush(piet::Color::BLACK));
+            let outline = outline.get_or_insert_with(|| ctx.solid_brush(piet::Color::BLACK));
 
-        // Draw a rotating star.
-        ctx.with_save(|ctx| {
-            ctx.transform({
-                let rotation = Affine::rotate((tick as f64) * 0.02);
-                let translation = Affine::translate((200.0, 200.0));
+            // Draw a rotating star.
+            ctx.with_save(|ctx| {
+                ctx.transform({
+                    let rotation = Affine::rotate((tick as f64) * 0.02);
+                    let translation = Affine::translate((200.0, 200.0));
 
-                translation * rotation
-            });
+                    translation * rotation
+                });
 
-            let solid_red = solid_red
-                .get_or_insert_with(|| ctx.solid_brush(piet::Color::rgb8(0x39, 0xe5, 0x8a)));
+                let solid_red = solid_red
+                    .get_or_insert_with(|| ctx.solid_brush(piet::Color::rgb8(0x39, 0xe5, 0x8a)));
 
-            ctx.fill(&star, solid_red);
-            ctx.stroke(&star, outline, 5.0);
+                ctx.fill(&star, solid_red);
+                ctx.stroke(&star, outline, 5.0);
 
-            Ok(())
-        })
-        .unwrap();
+                Ok(())
+            })
+            .unwrap();
 
-        // Draw a moving image.
-        {
-            let cos_curve = |x: f64, amp: f64, freq: f64| {
-                let x = x * std::f64::consts::PI * freq;
-                x.cos() * amp
-            };
-            let sin_curve = |x: f64, amp: f64, freq: f64| {
-                let x = x * std::f64::consts::PI * freq;
-                x.sin() * amp
-            };
+            // Draw a moving image.
+            {
+                let cos_curve = |x: f64, amp: f64, freq: f64| {
+                    let x = x * std::f64::consts::PI * freq;
+                    x.cos() * amp
+                };
+                let sin_curve = |x: f64, amp: f64, freq: f64| {
+                    let x = x * std::f64::consts::PI * freq;
+                    x.sin() * amp
+                };
 
-            let posn_shift_x = cos_curve(tick as f64, 50.0, 0.01);
-            let posn_shift_y = sin_curve(tick as f64, 50.0, 0.01);
-            let posn_x = 450.0 + posn_shift_x;
-            let posn_y = 150.0 + posn_shift_y;
+                let posn_shift_x = cos_curve(tick as f64, 50.0, 0.01);
+                let posn_shift_y = sin_curve(tick as f64, 50.0, 0.01);
+                let posn_x = 450.0 + posn_shift_x;
+                let posn_y = 150.0 + posn_shift_y;
 
-            let size_shift_x = cos_curve(tick as f64, 25.0, 0.02);
-            let size_shift_y = sin_curve(tick as f64, 25.0, 0.02);
-            let size_x = 100.0 + size_shift_x;
-            let size_y = 100.0 + size_shift_y;
+                let size_shift_x = cos_curve(tick as f64, 25.0, 0.02);
+                let size_shift_y = sin_curve(tick as f64, 25.0, 0.02);
+                let size_x = 100.0 + size_shift_x;
+                let size_y = 100.0 + size_shift_y;
 
-            let target_rect = Rect::new(posn_x, posn_y, posn_x + size_x, posn_y + size_y);
+                let target_rect = Rect::new(posn_x, posn_y, posn_x + size_x, posn_y + size_y);
 
-            let image_handle = image.get_or_insert_with(|| {
-                ctx.make_image(
-                    image_width as usize,
-                    image_height as usize,
-                    &image_data,
-                    piet::ImageFormat::RgbaSeparate,
-                )
-                .unwrap()
-            });
+                let image_handle = image.get_or_insert_with(|| {
+                    ctx.make_image(
+                        image_width as usize,
+                        image_height as usize,
+                        &image_data,
+                        piet::ImageFormat::RgbaSeparate,
+                    )
+                    .unwrap()
+                });
 
-            ctx.draw_image(image_handle, target_rect, piet::InterpolationMode::Bilinear);
+                ctx.draw_image(image_handle, target_rect, piet::InterpolationMode::Bilinear);
 
-            // Also draw a subset of the image.
-            let source_rect = Rect::new(
-                25.0 + posn_shift_x,
-                25.0 + posn_shift_y,
-                100.0 + posn_shift_x,
-                100.0 + posn_shift_y,
-            );
+                // Also draw a subset of the image.
+                let source_rect = Rect::new(
+                    25.0 + posn_shift_x,
+                    25.0 + posn_shift_y,
+                    100.0 + posn_shift_x,
+                    100.0 + posn_shift_y,
+                );
 
-            let target_rect = Rect::from_origin_size((625.0, 50.0), (100.0, 100.0));
+                let target_rect = Rect::from_origin_size((625.0, 50.0), (100.0, 100.0));
 
-            ctx.draw_image_area(
-                image_handle,
-                source_rect,
-                target_rect,
-                piet::InterpolationMode::Bilinear,
-            );
-            ctx.stroke(target_rect, outline, 5.0);
-        }
+                ctx.draw_image_area(
+                    image_handle,
+                    source_rect,
+                    target_rect,
+                    piet::InterpolationMode::Bilinear,
+                );
+                ctx.stroke(target_rect, outline, 5.0);
+            }
 
-        tick += 1;
-        ctx.finish().unwrap();
-        ctx.status()
-    };
+            tick += 1;
+            ctx.finish().unwrap();
+            ctx.status()
+        };
 
     event_loop.run(move |event, target, control_flow| {
         control_flow.set_wait_until(next_frame);
@@ -271,7 +272,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     gl_config.display().get_proc_address(symbol_cstr.as_c_str())
                                 });
 
-                                piet_hardware::Source::new(GlContext::new()).unwrap()
+                                piet_hardware::Source::new(GlContext::new(), &(), &()).unwrap()
                             }
                         })
                         .context()
@@ -311,7 +312,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Event::RedrawEventsCleared => {
                 if let (Some((surface, _, context)), Some(renderer)) = (&state, &mut renderer) {
                     // Create the render context.
-                    let mut render_context = renderer.render_context(size.width, size.height);
+                    let mut render_context =
+                        renderer.render_context(&(), &(), size.width, size.height);
 
                     // Perform drawing.
                     draw(&mut render_context).unwrap();
@@ -582,11 +584,13 @@ impl fmt::Display for GlError {
 impl std::error::Error for GlError {}
 
 impl piet_hardware::GpuContext for GlContext {
+    type Device = ();
+    type Queue = ();
     type Error = GlError;
     type Texture = gl::types::GLuint;
     type VertexBuffer = GlVertexBuffer;
 
-    fn clear(&self, color: piet::Color) {
+    fn clear(&mut self, _device: &(), _queue: &(), color: piet::Color) {
         self.assert_context();
         let (r, g, b, a) = color.as_rgba();
 
@@ -597,7 +601,7 @@ impl piet_hardware::GpuContext for GlContext {
         }
     }
 
-    fn flush(&self) -> Result<(), Self::Error> {
+    fn flush(&mut self) -> Result<(), Self::Error> {
         self.assert_context();
 
         unsafe {
@@ -608,7 +612,8 @@ impl piet_hardware::GpuContext for GlContext {
     }
 
     fn create_texture(
-        &self,
+        &mut self,
+        _device: &(),
         interpolation: piet::InterpolationMode,
         repeat: piet_hardware::RepeatStrategy,
     ) -> Result<Self::Texture, Self::Error> {
@@ -649,16 +654,10 @@ impl piet_hardware::GpuContext for GlContext {
         }
     }
 
-    fn delete_texture(&self, texture: Self::Texture) {
-        self.assert_context();
-
-        unsafe {
-            gl::DeleteTextures(1, &texture);
-        }
-    }
-
     fn write_texture(
-        &self,
+        &mut self,
+        _device: &(),
+        _queue: &(),
         texture: &Self::Texture,
         size: (u32, u32),
         format: piet::ImageFormat,
@@ -694,7 +693,9 @@ impl piet_hardware::GpuContext for GlContext {
     }
 
     fn write_subtexture(
-        &self,
+        &mut self,
+        _device: &(),
+        _queue: &(),
         texture: &Self::Texture,
         offset: (u32, u32),
         size: (u32, u32),
@@ -729,7 +730,8 @@ impl piet_hardware::GpuContext for GlContext {
     }
 
     fn set_texture_interpolation(
-        &self,
+        &mut self,
+        _device: &(),
         texture: &Self::Texture,
         interpolation: piet::InterpolationMode,
     ) {
@@ -757,7 +759,9 @@ impl piet_hardware::GpuContext for GlContext {
     }
 
     fn capture_area(
-        &self,
+        &mut self,
+        _device: &(),
+        _queue: &(),
         texture: &Self::Texture,
         offset: (u32, u32),
         size: (u32, u32),
@@ -798,6 +802,8 @@ impl piet_hardware::GpuContext for GlContext {
 
             // Write the image to the texture.
             self.write_subtexture(
+                &(),
+                &(),
                 texture,
                 offset,
                 size,
@@ -809,7 +815,7 @@ impl piet_hardware::GpuContext for GlContext {
         Ok(())
     }
 
-    fn max_texture_size(&self) -> (u32, u32) {
+    fn max_texture_size(&mut self, _device: &()) -> (u32, u32) {
         self.assert_context();
 
         unsafe {
@@ -819,7 +825,7 @@ impl piet_hardware::GpuContext for GlContext {
         }
     }
 
-    fn create_vertex_buffer(&self) -> Result<Self::VertexBuffer, Self::Error> {
+    fn create_vertex_buffer(&mut self, _device: &()) -> Result<Self::VertexBuffer, Self::Error> {
         self.assert_context();
 
         unsafe {
@@ -891,7 +897,9 @@ impl piet_hardware::GpuContext for GlContext {
     }
 
     fn write_vertices(
-        &self,
+        &mut self,
+        _device: &(),
+        _queue: &(),
         buffer: &Self::VertexBuffer,
         vertices: &[piet_hardware::Vertex],
         indices: &[u32],
@@ -918,17 +926,10 @@ impl piet_hardware::GpuContext for GlContext {
         }
     }
 
-    fn delete_vertex_buffer(&self, buffer: Self::VertexBuffer) {
-        self.assert_context();
-
-        unsafe {
-            let buffers = [buffer.vbo, buffer.ebo];
-            gl::DeleteBuffers(2, buffers.as_ptr());
-        }
-    }
-
     fn push_buffers(
-        &self,
+        &mut self,
+        _device: &(),
+        _queue: &(),
         vertex_buffer: &Self::VertexBuffer,
         current_texture: &Self::Texture,
         mask_texture: &Self::Texture,

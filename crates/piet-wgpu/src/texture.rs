@@ -21,9 +21,7 @@
 
 //! Convenient wrappers around WGPU textures.
 
-use super::{DeviceAndQueue, GpuContext};
-
-use std::cell::{Ref, RefCell, RefMut};
+use std::cell::{RefCell, RefMut};
 use std::rc::Rc;
 
 use piet_hardware::piet::{Color, ImageFormat, InterpolationMode};
@@ -35,12 +33,12 @@ pub(crate) struct WgpuTexture(Rc<RefCell<TextureInner>>);
 
 impl WgpuTexture {
     /// Create a new texture.
-    pub(crate) fn create_texture<DaQ: DeviceAndQueue + ?Sized>(
-        base: &GpuContext<DaQ>,
+    pub(crate) fn create_texture(
+        id: usize,
+        device: &wgpu::Device,
         interpolation: InterpolationMode,
         repeat: RepeatStrategy,
     ) -> Self {
-        let id = base.next_id();
         let filter_mode = match interpolation {
             InterpolationMode::Bilinear => wgpu::FilterMode::Linear,
             InterpolationMode::NearestNeighbor => wgpu::FilterMode::Nearest,
@@ -69,19 +67,16 @@ impl WgpuTexture {
             _ => panic!("unknown repeat strategy"),
         };
 
-        let sampler = base
-            .device_and_queue()
-            .device()
-            .create_sampler(&wgpu::SamplerDescriptor {
-                label: Some(&format!("piet-wgpu sampler {id}")),
-                compare: None,
-                mag_filter: filter_mode,
-                min_filter: filter_mode,
-                address_mode_u: address_mode,
-                address_mode_v: address_mode,
-                border_color,
-                ..Default::default()
-            });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some(&format!("piet-wgpu sampler {id}")),
+            compare: None,
+            mag_filter: filter_mode,
+            min_filter: filter_mode,
+            address_mode_u: address_mode,
+            address_mode_v: address_mode,
+            border_color,
+            ..Default::default()
+        });
 
         WgpuTexture(Rc::new(RefCell::new(TextureInner {
             id,
@@ -95,24 +90,14 @@ impl WgpuTexture {
         })))
     }
 
-    /// Borrow the inner texture.
-    pub(crate) fn borrow(&self) -> BorrowedTexture<'_> {
-        BorrowedTexture(self.0.borrow())
-    }
-
     /// Borrow the inner texture mutably.
     pub(crate) fn borrow_mut(&self) -> BorrowedTextureMut<'_> {
         BorrowedTextureMut(self.0.borrow_mut())
     }
-}
 
-/// Borrowed texture guard.
-pub(crate) struct BorrowedTexture<'a>(Ref<'a, TextureInner>);
-
-impl BorrowedTexture<'_> {
-    /// Get the bind group for this texture.
-    pub(crate) fn bind_group(&self) -> &wgpu::BindGroup {
-        self.0.bind_group.as_ref().unwrap()
+    /// Clone out the bind group for this texture.
+    pub(crate) fn bind_group(&self) -> Rc<wgpu::BindGroup> {
+        self.0.borrow().bind_group.as_ref().unwrap().clone()
     }
 }
 
@@ -121,9 +106,11 @@ pub(crate) struct BorrowedTextureMut<'a>(RefMut<'a, TextureInner>);
 
 impl BorrowedTextureMut<'_> {
     /// Write data to this texture.
-    pub(crate) fn write_texture<DaQ: DeviceAndQueue + ?Sized>(
+    pub(crate) fn write_texture(
         &mut self,
-        base: &GpuContext<DaQ>,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture_bind_group: &wgpu::BindGroupLayout,
         size: (u32, u32),
         format: ImageFormat,
         data: Option<&[u8]>,
@@ -137,35 +124,32 @@ impl BorrowedTextureMut<'_> {
         };
 
         let data_len = data.map_or(0, |d| d.len());
-        tracing::debug!(size=?size, format=?format, data_len=%data_len, "Writing a texture");
+        tracing::debug!(?size, ?format, %data_len, "Writing a texture");
 
         // Get the texture to write to.
         let texture = if self.0.texture.is_none() || self.0.format != format {
-            let texture =
-                base.device_and_queue()
-                    .device()
-                    .create_texture(&wgpu::TextureDescriptor {
-                        label: Some(&format!("piet-wgpu texture {}", self.0.id)),
-                        size,
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: match format {
-                            ImageFormat::Grayscale => wgpu::TextureFormat::R8Unorm,
-                            ImageFormat::Rgb => panic!("Unsupported"),
-                            ImageFormat::RgbaPremul => wgpu::TextureFormat::Rgba8Unorm,
-                            ImageFormat::RgbaSeparate => wgpu::TextureFormat::Rgba8Unorm,
-                            _ => panic!("Unsupported"),
-                        },
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
-                    });
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(&format!("piet-wgpu texture {}", self.0.id)),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: match format {
+                    ImageFormat::Grayscale => wgpu::TextureFormat::R8Unorm,
+                    ImageFormat::Rgb => panic!("Unsupported"),
+                    ImageFormat::RgbaPremul => wgpu::TextureFormat::Rgba8Unorm,
+                    ImageFormat::RgbaSeparate => wgpu::TextureFormat::Rgba8Unorm,
+                    _ => panic!("Unsupported"),
+                },
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+            });
 
             self.0.format = format;
             self.0.texture = Some(texture);
 
             // Reset the bind group.
-            self.0.recompute_bind_group(base);
+            self.0.recompute_bind_group(device, texture_bind_group);
 
             self.0.texture.as_ref().unwrap()
         } else {
@@ -188,7 +172,7 @@ impl BorrowedTextureMut<'_> {
             bytes_per_row: Some(size.width * bytes_per_pixel),
             rows_per_image: Some(size.height),
         };
-        base.device_and_queue().queue().write_texture(
+        queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture,
                 mip_level: 0,
@@ -202,9 +186,9 @@ impl BorrowedTextureMut<'_> {
     }
 
     /// Write to a sub-area of this texture.
-    pub(crate) fn write_subtexture<DaQ: DeviceAndQueue + ?Sized>(
+    pub(crate) fn write_subtexture(
         &mut self,
-        base: &GpuContext<DaQ>,
+        queue: &wgpu::Queue,
         offset: (u32, u32),
         size: (u32, u32),
         format: piet_hardware::piet::ImageFormat,
@@ -217,7 +201,7 @@ impl BorrowedTextureMut<'_> {
         let bytes_per_pixel = bytes_per_pixel(format);
 
         // Queue a data write to the texture.
-        base.device_and_queue().queue().write_texture(
+        queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture: self.0.texture.as_ref().expect("texture"),
                 mip_level: 0,
@@ -243,9 +227,10 @@ impl BorrowedTextureMut<'_> {
     }
 
     /// Change the interpolation mode.
-    pub(crate) fn set_texture_interpolation<DaQ: DeviceAndQueue + ?Sized>(
+    pub(crate) fn set_texture_interpolation(
         &mut self,
-        base: &GpuContext<DaQ>,
+        device: &wgpu::Device,
+        texture_bind_group: &wgpu::BindGroupLayout,
         interpolation: InterpolationMode,
     ) {
         if self.0.interpolation != interpolation {
@@ -255,20 +240,17 @@ impl BorrowedTextureMut<'_> {
             };
 
             self.0.interpolation = interpolation;
-            self.0.sampler =
-                base.device_and_queue()
-                    .device()
-                    .create_sampler(&wgpu::SamplerDescriptor {
-                        label: Some(&format!("piet-wgpu sampler {}", self.0.id)),
-                        compare: None,
-                        mag_filter: interp_mode,
-                        min_filter: interp_mode,
-                        address_mode_u: self.0.address_mode,
-                        address_mode_v: self.0.address_mode,
-                        border_color: self.0.border_color,
-                        ..Default::default()
-                    });
-            self.0.recompute_bind_group(base);
+            self.0.sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some(&format!("piet-wgpu sampler {}", self.0.id)),
+                compare: None,
+                mag_filter: interp_mode,
+                min_filter: interp_mode,
+                address_mode_u: self.0.address_mode,
+                address_mode_v: self.0.address_mode,
+                border_color: self.0.border_color,
+                ..Default::default()
+            });
+            self.0.recompute_bind_group(device, texture_bind_group);
         }
     }
 }
@@ -297,12 +279,16 @@ struct TextureInner {
     border_color: Option<wgpu::SamplerBorderColor>,
 
     /// The bind group to use to bind to the pipeline.
-    bind_group: Option<wgpu::BindGroup>,
+    bind_group: Option<Rc<wgpu::BindGroup>>,
 }
 
 impl TextureInner {
     /// Re-create the `BindGroup` from the current data.
-    fn recompute_bind_group<DaQ: DeviceAndQueue + ?Sized>(&mut self, base: &GpuContext<DaQ>) {
+    fn recompute_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        texture_bind_group: &wgpu::BindGroupLayout,
+    ) {
         let texture = match self.texture.as_ref() {
             Some(texture) => texture,
             None => {
@@ -311,27 +297,24 @@ impl TextureInner {
             }
         };
 
-        let new_bind_group =
-            base.device_and_queue()
-                .device()
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some(&format!("piet-wgpu texture bind group {}", self.id)),
-                    layout: base.texture_bind_layout(),
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(
-                                &texture.create_view(&wgpu::TextureViewDescriptor::default()),
-                            ),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
-                        },
-                    ],
-                });
+        let new_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&format!("piet-wgpu texture bind group {}", self.id)),
+            layout: texture_bind_group,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(
+                        &texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
 
-        self.bind_group = Some(new_bind_group);
+        self.bind_group = Some(Rc::new(new_bind_group));
     }
 }
 

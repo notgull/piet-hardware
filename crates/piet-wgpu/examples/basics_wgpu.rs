@@ -19,7 +19,6 @@
 
 use futures_lite::future;
 use instant::{Duration, Instant};
-use std::rc::Rc;
 
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
@@ -61,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut num_frames = 0;
     let mut current_fps = None;
 
-    let mut draw = move |rc: &mut RenderContext<'_, _>, width, height| {
+    let mut draw = move |rc: &mut RenderContext<'_, '_, '_>, width, height| {
         rc.clear(None, piet::Color::rgb8(0x87, 0xCE, 0xEB));
 
         let red_star = {
@@ -247,16 +246,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None,
                 ))
                 .expect("Failed to create device");
-                let device = Rc::new(device);
 
                 config.width = size.width;
                 config.height = size.height;
                 surface.configure(&device, &config);
 
-                let context = WgpuContext::new((device.clone(), queue), format, 1)
-                    .expect("Failed to create WgpuContext");
+                let context = WgpuContext::new(&device, &queue, config.format, None, 1);
 
-                state = Some((window, surface, context, device));
+                state = Some((window, surface, context, device, queue));
             }
 
             Event::Suspended => {
@@ -265,23 +262,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             Event::RedrawEventsCleared => {
-                if let Some((_, surface, context, _)) = &mut state {
+                if let Some((_, surface, context, device, queue)) = &mut state {
                     let frame = surface
                         .get_current_texture()
                         .expect("Failed to get texture view");
 
-                    // Draw using piet.
-                    draw(
-                        &mut context.render_context(
-                            frame
-                                .texture
-                                .create_view(&wgpu::TextureViewDescriptor::default()),
-                            window_size.0,
-                            window_size.1,
-                        ),
-                        window_size.0,
-                        window_size.1,
-                    );
+                    // Create the command encoder.
+                    let mut encoder = device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+                    let view = frame
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
+
+                    {
+                        let mut render_pass =
+                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: None,
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                                            r: 0.0,
+                                            g: 0.0,
+                                            b: 0.0,
+                                            a: 1.0,
+                                        }),
+                                        store: true,
+                                    },
+                                })],
+                                depth_stencil_attachment: None,
+                            });
+
+                        let mut piet = context.prepare(device, queue, window_size.0, window_size.1);
+                        draw(&mut piet, window_size.0, window_size.1);
+
+                        // Finish the render pass.
+                        context.render(&mut render_pass);
+                    }
+
+                    // Submit the command buffer to the queue.
+                    queue.submit(Some(encoder.finish()));
 
                     // Present the frame.
                     frame.present();
@@ -292,7 +314,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 WindowEvent::CloseRequested => control_flow.set_exit(),
                 WindowEvent::Resized(size) => {
                     window_size = (size.width, size.height);
-                    if let Some((_, surface, _, device)) = &state {
+                    if let Some((_, surface, _, device, _)) = &state {
                         config.width = size.width;
                         config.height = size.height;
                         surface.configure(device, &config);

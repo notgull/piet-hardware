@@ -58,7 +58,6 @@ use tinyvec::TinyVec;
 use std::error::Error as StdError;
 use std::fmt;
 use std::mem;
-use std::rc::Rc;
 
 mod atlas;
 mod brush;
@@ -70,7 +69,7 @@ mod resources;
 mod text;
 
 pub use self::brush::Brush;
-pub use self::gpu_backend::{BufferType, GpuContext, RepeatStrategy, Vertex, VertexFormat};
+pub use self::gpu_backend::{BufferType, GpuContext, RepeatStrategy, Vertex};
 pub use self::image::Image;
 pub use self::text::{Text, TextLayout, TextLayoutBuilder};
 
@@ -83,9 +82,6 @@ const UV_WHITE: [f32; 2] = [0.5, 0.5];
 
 /// The source of the GPU renderer.
 pub struct Source<C: GpuContext + ?Sized> {
-    /// The context to use for the GPU renderer.
-    context: Rc<C>,
-
     /// A texture that consists of an endless repeating pattern of a single white pixel.
     ///
     /// This is used for solid-color fills. It is also used as the mask for when a
@@ -100,12 +96,15 @@ pub struct Source<C: GpuContext + ?Sized> {
 
     /// The font atlas.
     atlas: Option<Atlas<C>>,
+
+    /// The context to use for the GPU renderer.
+    context: C,
 }
 
 impl<C: GpuContext + fmt::Debug + ?Sized> fmt::Debug for Source<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Source")
-            .field("context", &self.context)
+            .field("context", &&self.context)
             .finish_non_exhaustive()
     }
 }
@@ -119,46 +118,45 @@ struct Buffers<C: GpuContext + ?Sized> {
 }
 
 impl<C: GpuContext + ?Sized> Source<C> {
-    /// Create a new source from a context wrapped in an `Rc`.
-    pub fn from_rc(context: Rc<C>) -> Result<Self, Pierror> {
-        let make_white_pixel = || {
-            const WHITE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
+    /// Create a new source from a context.
+    pub fn new(mut context: C, device: &C::Device, queue: &C::Queue) -> Result<Self, Pierror>
+    where
+        C: Sized,
+    {
+        const WHITE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
 
-            // Setup a white pixel texture.
-            let texture = Texture::new(
-                &context,
-                InterpolationMode::NearestNeighbor,
-                RepeatStrategy::Repeat,
-            )
-            .piet_err()?;
+        // Setup a white pixel texture.
+        let texture = Texture::new(
+            &mut context,
+            device,
+            InterpolationMode::NearestNeighbor,
+            RepeatStrategy::Repeat,
+        )
+        .piet_err()?;
 
-            texture.write_texture((1, 1), piet::ImageFormat::RgbaSeparate, Some(&WHITE));
-
-            Result::<_, Pierror>::Ok(texture)
-        };
+        texture.write_texture(
+            &mut context,
+            device,
+            queue,
+            (1, 1),
+            piet::ImageFormat::RgbaSeparate,
+            Some(&WHITE),
+        );
 
         Ok(Self {
-            white_pixel: make_white_pixel()?,
+            white_pixel: texture,
             buffers: {
-                let vbo = VertexBuffer::new(&context).piet_err()?;
+                let vbo = VertexBuffer::new(&mut context, device).piet_err()?;
 
                 Buffers {
                     rasterizer: Rasterizer::new(),
                     vbo,
                 }
             },
-            atlas: Some(Atlas::new(&context)?),
+            atlas: Some(Atlas::new(&mut context, device, queue)?),
             context,
             text: Text::new(),
         })
-    }
-
-    /// Create a new source from a context.
-    pub fn new(context: C) -> Result<Self, Pierror>
-    where
-        C: Sized,
-    {
-        Self::from_rc(Rc::new(context))
     }
 
     /// Get a reference to the context.
@@ -166,10 +164,23 @@ impl<C: GpuContext + ?Sized> Source<C> {
         &self.context
     }
 
+    /// Get a mutable reference to the context.
+    pub fn context_mut(&mut self) -> &mut C {
+        &mut self.context
+    }
+
     /// Create a new rendering context.
-    pub fn render_context(&mut self, width: u32, height: u32) -> RenderContext<'_, C> {
+    pub fn render_context<'this, 'dev, 'que>(
+        &'this mut self,
+        device: &'dev C::Device,
+        queue: &'que C::Queue,
+        width: u32,
+        height: u32,
+    ) -> RenderContext<'this, 'dev, 'que, C> {
         RenderContext {
             source: self,
+            device,
+            queue,
             size: (width, height),
             state: TinyVec::from([RenderState::default()]),
             status: Ok(()),
@@ -189,9 +200,15 @@ impl<C: GpuContext + ?Sized> Source<C> {
 }
 
 /// The whole point of this crate.
-pub struct RenderContext<'a, C: GpuContext + ?Sized> {
+pub struct RenderContext<'src, 'dev, 'que, C: GpuContext + ?Sized> {
     /// The source of the GPU renderer.
-    source: &'a mut Source<C>,
+    source: &'src mut Source<C>,
+
+    /// The device that we are rendering to.
+    device: &'dev C::Device,
+
+    /// The queue that we are rendering to.
+    queue: &'que C::Queue,
 
     /// The width and height of the target.
     size: (u32, u32),
@@ -223,7 +240,7 @@ impl<C: GpuContext + ?Sized> Default for RenderState<C> {
     }
 }
 
-impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
+impl<C: GpuContext + ?Sized> RenderContext<'_, '_, '_, C> {
     /// Fill in a rectangle.
     fn fill_rects(
         &mut self,
@@ -281,6 +298,9 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
     fn push_buffers(&mut self, texture: Option<&Texture<C>>) -> Result<(), Pierror> {
         // Upload the vertex and index buffers.
         self.source.buffers.vbo.upload(
+            &mut self.source.context,
+            self.device,
+            self.queue,
             self.source.buffers.rasterizer.vertices(),
             self.source.buffers.rasterizer.indices(),
         );
@@ -289,7 +309,10 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
         let (transform, mask) = {
             let state = self.state.last_mut().unwrap();
 
-            let mask = state.mask.texture()?.unwrap_or(&self.source.white_pixel);
+            let mask = state
+                .mask
+                .texture(&mut self.source.context, self.device, self.queue)?
+                .unwrap_or(&self.source.white_pixel);
 
             (&state.transform, mask)
         };
@@ -301,6 +324,8 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, C> {
         self.source
             .context
             .push_buffers(
+                self.device,
+                self.queue,
                 self.source.buffers.vbo.resource(),
                 texture.resource(),
                 mask.resource(),
@@ -348,7 +373,7 @@ macro_rules! leap {
     }};
 }
 
-impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
+impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C> {
     type Brush = Brush<C>;
     type Text = Text;
     type TextLayout = TextLayout;
@@ -364,8 +389,12 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
 
     fn gradient(&mut self, gradient: impl Into<FixedGradient>) -> Result<Self::Brush, Pierror> {
         match gradient.into() {
-            FixedGradient::Linear(linear) => Brush::linear_gradient(&self.source.context, linear),
-            FixedGradient::Radial(radial) => Brush::radial_gradient(&self.source.context, radial),
+            FixedGradient::Linear(linear) => {
+                Brush::linear_gradient(&mut self.source.context, self.device, self.queue, linear)
+            }
+            FixedGradient::Radial(radial) => {
+                Brush::radial_gradient(&mut self.source.context, self.device, self.queue, radial)
+            }
         }
     }
 
@@ -374,7 +403,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
 
         // Use optimized clear if possible.
         if region.is_none() && self.state.last().unwrap().mask.is_empty() {
-            self.source.context.clear(color);
+            self.source.context.clear(self.device, self.queue, color);
             return;
         }
 
@@ -438,7 +467,8 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         leap!(
             self,
             state.mask.clip(
-                &self.source.context,
+                &mut self.source.context,
+                self.device,
                 shape,
                 self.tolerance,
                 transform,
@@ -452,12 +482,12 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
     }
 
     fn draw_text(&mut self, layout: &Self::TextLayout, pos: impl Into<Point>) {
-        struct RestoreAtlas<'a, 'b, G: GpuContext + ?Sized> {
-            context: &'a mut RenderContext<'b, G>,
+        struct RestoreAtlas<'a, 'b, 'c, 'd, G: GpuContext + ?Sized> {
+            context: &'a mut RenderContext<'b, 'c, 'd, G>,
             atlas: Option<Atlas<G>>,
         }
 
-        impl<G: GpuContext + ?Sized> Drop for RestoreAtlas<'_, '_, G> {
+        impl<G: GpuContext + ?Sized> Drop for RestoreAtlas<'_, '_, '_, '_, G> {
             fn drop(&mut self) {
                 self.context.source.atlas = Some(self.atlas.take().unwrap());
             }
@@ -473,6 +503,8 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         let texture = restore.atlas.as_ref().unwrap().texture().clone();
 
         let text = restore.context.text().clone();
+        let device = restore.context.device;
+        let queue = restore.context.queue;
         let mut line_state = TextProcessingState::new();
         let rects = layout
             .buffer()
@@ -491,7 +523,15 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
                         uv_rect,
                         offset,
                         size,
-                    } = match text.with_font_system_mut(|fs| atlas.uv_rect(glyph, fs)) {
+                    } = match text.with_font_system_mut(|fs| {
+                        atlas.uv_rect(
+                            &mut restore.context.source.context,
+                            device,
+                            queue,
+                            glyph,
+                            fs,
+                        )
+                    }) {
                         Ok(rect) => rect,
                         Err(e) => {
                             tracing::trace!("failed to get uv rect: {}", e);
@@ -530,7 +570,8 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
                         color,
                     })
                 }
-            });
+            })
+            .collect::<Vec<_>>();
         let result = restore.context.fill_rects(rects, Some(&texture));
 
         drop(restore);
@@ -615,13 +656,21 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         format: piet::ImageFormat,
     ) -> Result<Self::Image, Pierror> {
         let tex = Texture::new(
-            &self.source.context,
+            &mut self.source.context,
+            self.device,
             InterpolationMode::Bilinear,
             RepeatStrategy::Color(piet::Color::TRANSPARENT),
         )
         .piet_err()?;
 
-        tex.write_texture((width as u32, height as u32), format, Some(buf));
+        tex.write_texture(
+            &mut self.source.context,
+            self.device,
+            self.queue,
+            (width as u32, height as u32),
+            format,
+            Some(buf),
+        );
 
         Ok(Image::new(tex, Size::new(width as f64, height as f64)))
     }
@@ -658,7 +707,9 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         };
 
         // Set the interpolation mode.
-        image.texture().set_interpolation(interp);
+        image
+            .texture()
+            .set_interpolation(&mut self.source.context, self.device, interp);
 
         // Use this to draw the image.
         if let Err(e) = self.fill_rects(
@@ -680,7 +731,8 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         // Create a new texture to copy the image to.
         let image = {
             let texture = Texture::new(
-                &self.source.context,
+                &mut self.source.context,
+                self.device,
                 InterpolationMode::Bilinear,
                 RepeatStrategy::Repeat,
             )
@@ -694,7 +746,13 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, C> {
         let size = (src_size.width as u32, src_size.height as u32);
         self.source
             .context
-            .capture_area(image.texture().resource(), offset, size)
+            .capture_area(
+                self.device,
+                self.queue,
+                image.texture().resource(),
+                offset,
+                size,
+            )
             .piet_err()?;
 
         Ok(image)
