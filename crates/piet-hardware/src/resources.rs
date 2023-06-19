@@ -131,7 +131,7 @@ impl<C: GpuContext + ?Sized> Texture<C> {
     ) {
         // Create a pixmap to render the shader into.
         if approx_eq(size.width as f32, 0.0) || approx_eq(size.height as f32, 0.0) {
-            return;
+            panic!("Zero size shader?");
         }
 
         let mut pixmap =

@@ -97,7 +97,12 @@ impl WgpuTexture {
 
     /// Clone out the bind group for this texture.
     pub(crate) fn bind_group(&self) -> Rc<wgpu::BindGroup> {
-        self.0.borrow().bind_group.as_ref().unwrap().clone()
+        self.0
+            .borrow()
+            .bind_group
+            .as_ref()
+            .expect("texture not bound yet")
+            .clone()
     }
 }
 
@@ -123,6 +128,45 @@ impl BorrowedTextureMut<'_> {
             depth_or_array_layers: 1,
         };
 
+        let formatted_data;
+        let mut data = data;
+
+        let wgpu_format = match format {
+            ImageFormat::Grayscale => {
+                // Translate to RGBA.
+                formatted_data = data.map(|data| {
+                    let mut new_data = Vec::with_capacity(data.len() * 4);
+                    for &byte in data {
+                        new_data.push(byte);
+                        new_data.push(byte);
+                        new_data.push(byte);
+                        new_data.push(255);
+                    }
+                    new_data
+                });
+                data = formatted_data.as_deref();
+                wgpu::TextureFormat::Rgba8Unorm
+            }
+            ImageFormat::Rgb => {
+                // Translate to RGBA.
+                formatted_data = data.map(|data| {
+                    let mut new_data = Vec::with_capacity(data.len() * 4);
+                    for chunk in data.chunks(3) {
+                        new_data.push(chunk[0]);
+                        new_data.push(chunk[1]);
+                        new_data.push(chunk[2]);
+                        new_data.push(255);
+                    }
+                    new_data
+                });
+                data = formatted_data.as_deref();
+                wgpu::TextureFormat::Rgba8Unorm
+            }
+            ImageFormat::RgbaPremul => wgpu::TextureFormat::Rgba8Unorm,
+            ImageFormat::RgbaSeparate => wgpu::TextureFormat::Rgba8Unorm,
+            _ => panic!("Unsupported"),
+        };
+
         let data_len = data.map_or(0, |d| d.len());
         tracing::debug!(?size, ?format, %data_len, "Writing a texture");
 
@@ -134,13 +178,7 @@ impl BorrowedTextureMut<'_> {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: match format {
-                    ImageFormat::Grayscale => wgpu::TextureFormat::R8Unorm,
-                    ImageFormat::Rgb => panic!("Unsupported"),
-                    ImageFormat::RgbaPremul => wgpu::TextureFormat::Rgba8Unorm,
-                    ImageFormat::RgbaSeparate => wgpu::TextureFormat::Rgba8Unorm,
-                    _ => panic!("Unsupported"),
-                },
+                format: wgpu_format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
             });
@@ -320,8 +358,8 @@ impl TextureInner {
 
 fn bytes_per_pixel(format: ImageFormat) -> u32 {
     match format {
-        ImageFormat::Grayscale => 1u32,
-        ImageFormat::Rgb => 3,
+        ImageFormat::Grayscale => 4u32,
+        ImageFormat::Rgb => 4,
         ImageFormat::RgbaPremul => 4,
         ImageFormat::RgbaSeparate => 4,
         _ => panic!("Unsupported"),

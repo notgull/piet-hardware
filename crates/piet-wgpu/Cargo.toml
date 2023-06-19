@@ -21,5 +21,7 @@ wgpu = "0.16"
 futures-lite = "1.13.0"
 image = { version = "0.24.6", default-features = false, features = ["jpeg", "png"] }
 instant = { version = "0.1.12", default-features = false, features = ["wasm-bindgen"] }
+piet = { version = "0.6.2", features = ["samples"] }
+png = "0.17.9"
 tracing-subscriber = "0.3.17"
 winit = "0.28.3"
