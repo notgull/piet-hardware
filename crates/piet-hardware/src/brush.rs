@@ -88,6 +88,10 @@ impl<C: GpuContext + ?Sized> Brush<C> {
         let bounds = Rect::from_points(gradient.start, gradient.end);
         let offset = -bounds.origin().to_vec2();
 
+        if approx_eq(bounds.width(), 0.0) || approx_eq(bounds.height(), 0.0) {
+            return Err(Pierror::InvalidInput);
+        }
+
         texture.write_linear_gradient(context, device, queue, &gradient, bounds.size(), offset)?;
         Ok(Self::textured(texture, bounds))
     }
@@ -172,4 +176,8 @@ impl<C: GpuContext + ?Sized> Clone for BrushInner<C> {
             },
         }
     }
+}
+
+fn approx_eq(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-6
 }

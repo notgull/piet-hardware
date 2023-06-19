@@ -83,9 +83,8 @@ async fn entry() -> ! {
 
                 // Create a texture to render into.
                 let dims = BufferDimensions::new(size.width as _, size.height as _);
-                println!("{dims:?}");
                 let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: None,
+                    label: Some(&format!("sample output for #{number}")),
                     size: wgpu::Extent3d {
                         width: dims.width as _,
                         height: dims.height as _,
@@ -102,7 +101,7 @@ async fn entry() -> ! {
 
                 // Create a buffer to copy the texture into.
                 let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: None,
+                    label: Some(&format!("buffer output for #{number}")),
                     size: (dims.padded_bytes_per_row * dims.height) as _,
                     usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                     mapped_at_creation: false,
