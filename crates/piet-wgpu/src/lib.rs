@@ -21,12 +21,25 @@
 
 //! A GPU-accelerated 2D graphics backend for [`piet`] that uses the [`wgpu`] crate.
 //!
+//! This crate follows the [`wgpu` middleware pattern], but in a somewhat unique way.
+//!
+//! - The user creates the [`WgpuContext`] by calling `new()` with a device and expected texture
+//!   format.
+//! - Before rendering, the user creates a [`RenderContext`] by calling `prepare()` on the
+//!   [`WgpuContext`] with a [`Device`] and a [`Queue`]. `prepare()` returns the context,
+//!   which is expected to be written to.
+//! - Finally, by calling `render` on the [`WgpuContext`], the user renders all of the material
+//!   that was written to the [`RenderContext`] using the [`piet`] API.
+//!
 //! [`piet`]: https://crates.io/crates/piet
 //! [`wgpu`]: https://crates.io/crates/wgpu
+//! [`wgpu` middleware pattern]: https://github.com/gfx-rs/wgpu/wiki/Encapsulating-Graphics-Work
+//! [`WgpuContext`]: struct.WgpuContext.html
+//! [`RenderContext`]: struct.RenderContext.html
+//! [`Device`]: wgpu::Device
+//! [`Queue`]: wgpu::Queue
 
 #![forbid(unsafe_code, rust_2018_idioms)]
-
-use std::borrow;
 
 use piet_hardware::piet::kurbo::Affine;
 use piet_hardware::piet::{self, Color, Error as Pierror, ImageFormat, InterpolationMode};
@@ -37,92 +50,65 @@ mod texture;
 
 use context::GpuContext;
 
-/// A reference to a [`wgpu`] [`Device`], and [`Queue`].
-///
-/// This is used by the GPU context to create resources. It can take the form of a (Device, Queue)
-/// tuple, or a tuple of references to them.
-///
-/// [`wgpu`]: https://crates.io/crates/wgpu
-/// [`Device`]: https://docs.rs/wgpu/latest/wgpu/struct.Device.html
-/// [`Queue`]: https://docs.rs/wgpu/latest/wgpu/struct.Queue.html
-pub trait DeviceAndQueue {
-    /// Returns a reference to the [`Device`].
-    fn device(&self) -> &wgpu::Device;
+/// A wrapper around internal cached state.
+pub struct WgpuContext {
+    /// The internal context.
+    source: piet_hardware::Source<GpuContext>,
 
-    /// Returns a reference to the [`Queue`].
-    fn queue(&self) -> &wgpu::Queue;
-}
-
-impl<A: borrow::Borrow<wgpu::Device>, B: borrow::Borrow<wgpu::Queue>> DeviceAndQueue for (A, B) {
-    fn device(&self) -> &wgpu::Device {
-        borrow::Borrow::borrow(&self.0)
-    }
-
-    fn queue(&self) -> &wgpu::Queue {
-        borrow::Borrow::borrow(&self.1)
-    }
-}
-
-/// A wrapper around a [`wgpu`] [`Device`] and [`Queue`] with cached information.
-pub struct WgpuContext<D: DeviceAndQueue + ?Sized> {
-    source: piet_hardware::Source<GpuContext<D>>,
+    /// The text.
     text: Text,
 }
 
-impl<D: DeviceAndQueue + ?Sized> WgpuContext<D> {
-    /// Create a new [`WgpuContext`] from a [`Device`] and [`Queue`].
+impl WgpuContext {
+    /// Create a new [`wgpu`]-based drawing context.
     pub fn new(
-        device_and_queue: D,
-        output_format: wgpu::TextureFormat,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        depth_format: Option<wgpu::TextureFormat>,
         samples: u32,
-    ) -> Result<Self, Pierror>
-    where
-        D: Sized,
-    {
-        let source = piet_hardware::Source::new(GpuContext::new(
-            device_and_queue,
-            output_format,
-            None,
-            samples,
-        ))?;
-        let text = source.text().clone();
-
-        Ok(Self {
-            source,
-            text: Text(text),
-        })
+    ) -> Self {
+        let source = piet_hardware::Source::new(
+            GpuContext::new(device, format, depth_format, samples),
+            device,
+            queue,
+        )
+        .expect("failed to create GPU context");
+        let text = Text(source.text().clone());
+        Self { source, text }
     }
 
-    /// Get a reference to the underlying [`Device`] and [`Queue`].
-    pub fn device_and_queue(&self) -> &D {
-        self.source.context().device_and_queue()
-    }
-
-    /// Get the render context.
-    pub fn render_context(
-        &mut self,
-        view: wgpu::TextureView,
+    /// Prepare rendering by drawing to a [`RenderContext`].
+    ///
+    /// After this method is called, drawing is expected to be done to the returned context.
+    pub fn prepare<'this, 'dev, 'que>(
+        &'this mut self,
+        device: &'dev wgpu::Device,
+        queue: &'que wgpu::Queue,
         width: u32,
         height: u32,
-    ) -> RenderContext<'_, D> {
-        self.source.context().set_texture_view(view);
-
+    ) -> RenderContext<'this, 'dev, 'que> {
         RenderContext {
+            context: self.source.render_context(device, queue, width, height),
             text: &mut self.text,
-            context: self.source.render_context(width, height),
         }
+    }
+
+    /// Render the contents of the [`RenderContext`] to the provided render pass.
+    pub fn render<'this>(&'this self, pass: &mut wgpu::RenderPass<'this>) {
+        self.source.context().render(pass);
     }
 }
 
 /// The whole point.
-pub struct RenderContext<'a, D: DeviceAndQueue + ?Sized> {
-    context: piet_hardware::RenderContext<'a, GpuContext<D>>,
-    text: &'a mut Text,
+pub struct RenderContext<'context, 'device, 'queue> {
+    context: piet_hardware::RenderContext<'context, 'device, 'queue, GpuContext>,
+    text: &'context mut Text,
 }
 
-impl<D: DeviceAndQueue + ?Sized> piet::RenderContext for RenderContext<'_, D> {
-    type Brush = Brush<D>;
-    type Image = Image<D>;
+impl piet::RenderContext for RenderContext<'_, '_, '_> {
+    type Brush = Brush;
+    type Image = Image;
     type Text = Text;
     type TextLayout = TextLayout;
 
@@ -265,34 +251,34 @@ impl<D: DeviceAndQueue + ?Sized> piet::RenderContext for RenderContext<'_, D> {
 }
 
 /// The brush type.
-pub struct Brush<D: DeviceAndQueue + ?Sized>(piet_hardware::Brush<GpuContext<D>>);
+pub struct Brush(piet_hardware::Brush<GpuContext>);
 
-impl<D: DeviceAndQueue + ?Sized> Clone for Brush<D> {
+impl Clone for Brush {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<D: DeviceAndQueue + ?Sized> piet::IntoBrush<RenderContext<'_, D>> for Brush<D> {
+impl piet::IntoBrush<RenderContext<'_, '_, '_>> for Brush {
     fn make_brush<'a>(
         &'a self,
-        _piet: &mut RenderContext<'_, D>,
+        _piet: &mut RenderContext<'_, '_, '_>,
         _bbox: impl FnOnce() -> piet::kurbo::Rect,
-    ) -> std::borrow::Cow<'a, Brush<D>> {
+    ) -> std::borrow::Cow<'a, Brush> {
         std::borrow::Cow::Borrowed(self)
     }
 }
 
 /// The image type.
-pub struct Image<D: DeviceAndQueue + ?Sized>(piet_hardware::Image<GpuContext<D>>);
+pub struct Image(piet_hardware::Image<GpuContext>);
 
-impl<D: DeviceAndQueue + ?Sized> Clone for Image<D> {
+impl Clone for Image {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<D: DeviceAndQueue + ?Sized> piet::Image for Image<D> {
+impl piet::Image for Image {
     fn size(&self) -> piet::kurbo::Size {
         self.0.size()
     }

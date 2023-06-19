@@ -30,7 +30,6 @@ use piet::kurbo::{Affine, Circle, Point, Rect, Shape};
 use piet::{Error as Pierror, FixedLinearGradient, FixedRadialGradient, Image as _};
 
 use std::borrow::Cow;
-use std::rc::Rc;
 
 /// The brush type used by the GPU renderer.
 pub struct Brush<C: GpuContext + ?Sized>(BrushInner<C>);
@@ -55,12 +54,12 @@ enum BrushInner<C: GpuContext + ?Sized> {
     },
 }
 
-impl<C: GpuContext + ?Sized> piet::IntoBrush<RenderContext<'_, C>> for Brush<C> {
+impl<C: GpuContext + ?Sized> piet::IntoBrush<RenderContext<'_, '_, '_, C>> for Brush<C> {
     fn make_brush<'a>(
         &'a self,
-        _piet: &mut RenderContext<'_, C>,
+        _piet: &mut RenderContext<'_, '_, '_, C>,
         _bbox: impl FnOnce() -> Rect,
-    ) -> Cow<'a, <RenderContext<'_, C> as piet::RenderContext>::Brush> {
+    ) -> Cow<'a, <RenderContext<'_, '_, '_, C> as piet::RenderContext>::Brush> {
         Cow::Borrowed(self)
     }
 }
@@ -73,11 +72,14 @@ impl<C: GpuContext + ?Sized> Brush<C> {
 
     /// Create a new brush from a linear gradient.
     pub(crate) fn linear_gradient(
-        context: &Rc<C>,
+        context: &mut C,
+        device: &C::Device,
+        queue: &C::Queue,
         gradient: FixedLinearGradient,
     ) -> Result<Self, Pierror> {
         let texture = Texture::new(
             context,
+            device,
             piet::InterpolationMode::Bilinear,
             RepeatStrategy::Clamp,
         )
@@ -86,17 +88,20 @@ impl<C: GpuContext + ?Sized> Brush<C> {
         let bounds = Rect::from_points(gradient.start, gradient.end);
         let offset = -bounds.origin().to_vec2();
 
-        texture.write_linear_gradient(&gradient, bounds.size(), offset)?;
+        texture.write_linear_gradient(context, device, queue, &gradient, bounds.size(), offset)?;
         Ok(Self::textured(texture, bounds))
     }
 
     /// Create a new brush from a radial gradient.
     pub(crate) fn radial_gradient(
-        context: &Rc<C>,
+        context: &mut C,
+        device: &C::Device,
+        queue: &C::Queue,
         gradient: FixedRadialGradient,
     ) -> Result<Self, Pierror> {
         let texture = Texture::new(
             context,
+            device,
             piet::InterpolationMode::Bilinear,
             RepeatStrategy::Clamp,
         )
@@ -105,7 +110,7 @@ impl<C: GpuContext + ?Sized> Brush<C> {
         let bounds = Circle::new(gradient.center, gradient.radius).bounding_box();
         let offset = -bounds.origin().to_vec2();
 
-        texture.write_radial_gradient(&gradient, bounds.size(), offset)?;
+        texture.write_radial_gradient(context, device, queue, &gradient, bounds.size(), offset)?;
         Ok(Self::textured(texture, bounds))
     }
 

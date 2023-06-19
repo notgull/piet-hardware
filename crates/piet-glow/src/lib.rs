@@ -32,6 +32,7 @@ use std::borrow::Cow;
 use std::cell::Cell;
 use std::fmt;
 use std::mem;
+use std::rc::Rc;
 
 macro_rules! c {
     ($e:expr) => {{
@@ -87,7 +88,7 @@ struct GpuContext<H: HasContext + ?Sized> {
     check_indices: bool,
 
     /// The underlying context.
-    context: H,
+    context: Rc<H>,
 }
 
 impl<H: HasContext + ?Sized> GpuContext<H> {
@@ -105,10 +106,27 @@ impl<H: HasContext + ?Sized> Drop for GpuContext<H> {
 }
 
 /// A wrapper around a `glow` texture.
-struct GlTexture<H: HasContext + ?Sized>(H::Texture);
+struct GlTexture<H: HasContext + ?Sized> {
+    /// The OpenGL context.
+    context: Rc<H>,
+
+    /// The underlying texture.
+    texture: H::Texture,
+}
+
+impl<H: HasContext + ?Sized> Drop for GlTexture<H> {
+    fn drop(&mut self) {
+        unsafe {
+            self.context.delete_texture(self.texture);
+        }
+    }
+}
 
 /// A wrapper around a `glow` vertex buffer.
 struct GlVertexBuffer<H: HasContext + ?Sized> {
+    /// The context.
+    context: Rc<H>,
+
     /// The underlying vertex buffer.
     vbo: H::Buffer,
 
@@ -120,6 +138,16 @@ struct GlVertexBuffer<H: HasContext + ?Sized> {
 
     /// The number of indices.
     num_indices: Cell<usize>,
+}
+
+impl<H: HasContext + ?Sized> Drop for GlVertexBuffer<H> {
+    fn drop(&mut self) {
+        unsafe {
+            self.context.delete_buffer(self.vbo);
+            self.context.delete_buffer(self.ebo);
+            self.context.delete_vertex_array(self.vao);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -140,11 +168,13 @@ impl fmt::Display for GlError {
 impl std::error::Error for GlError {}
 
 impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
+    type Device = ();
+    type Queue = ();
     type Texture = GlTexture<H>;
     type VertexBuffer = GlVertexBuffer<H>;
     type Error = GlError;
 
-    fn clear(&self, color: piet_hardware::piet::Color) {
+    fn clear(&mut self, _: &(), _: &(), color: piet_hardware::piet::Color) {
         let (r, g, b, a) = color.as_rgba();
 
         unsafe {
@@ -153,7 +183,7 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
         }
     }
 
-    fn flush(&self) -> Result<(), Self::Error> {
+    fn flush(&mut self) -> Result<(), Self::Error> {
         unsafe {
             self.context.flush();
         }
@@ -162,7 +192,8 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
     }
 
     fn create_texture(
-        &self,
+        &mut self,
+        _: &(),
         interpolation: piet_hardware::piet::InterpolationMode,
         repeat: piet_hardware::RepeatStrategy,
     ) -> Result<Self::Texture, Self::Error> {
@@ -215,20 +246,19 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
             self.context
                 .tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, wrap_t as i32);
 
-            gl_error(&self.context);
+            gl_error(&*self.context);
 
-            Ok(GlTexture(texture))
-        }
-    }
-
-    fn delete_texture(&self, texture: Self::Texture) {
-        unsafe {
-            self.context.delete_texture(texture.0);
+            Ok(GlTexture {
+                context: self.context.clone(),
+                texture,
+            })
         }
     }
 
     fn write_texture(
-        &self,
+        &mut self,
+        _: &(),
+        _: &(),
         texture: &Self::Texture,
         (width, height): (u32, u32),
         format: piet::ImageFormat,
@@ -254,7 +284,8 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
         let mut data = data;
 
         unsafe {
-            self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
+            self.context
+                .bind_texture(glow::TEXTURE_2D, Some(texture.texture));
             let _guard = CallOnDrop(|| {
                 self.context.bind_texture(glow::TEXTURE_2D, None);
             });
@@ -290,11 +321,13 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
             );
         }
 
-        gl_error(&self.context);
+        gl_error(&*self.context);
     }
 
     fn write_subtexture(
-        &self,
+        &mut self,
+        _: &(),
+        _: &(),
         texture: &Self::Texture,
         (x, y): (u32, u32),
         (width, height): (u32, u32),
@@ -312,7 +345,8 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
         assert_eq!(data.len(), total_len);
 
         unsafe {
-            self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
+            self.context
+                .bind_texture(glow::TEXTURE_2D, Some(texture.texture));
             let _guard = CallOnDrop(|| {
                 self.context.bind_texture(glow::TEXTURE_2D, None);
             });
@@ -338,16 +372,18 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
             );
         }
 
-        gl_error(&self.context);
+        gl_error(&*self.context);
     }
 
     fn set_texture_interpolation(
-        &self,
+        &mut self,
+        _: &(),
         texture: &Self::Texture,
         interpolation: piet_hardware::piet::InterpolationMode,
     ) {
         unsafe {
-            self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
+            self.context
+                .bind_texture(glow::TEXTURE_2D, Some(texture.texture));
             let _guard = CallOnDrop(|| {
                 self.context.bind_texture(glow::TEXTURE_2D, None);
             });
@@ -371,7 +407,9 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
     }
 
     fn capture_area(
-        &self,
+        &mut self,
+        _: &(),
+        _: &(),
         texture: &Self::Texture,
         offset: (u32, u32),
         size: (u32, u32),
@@ -387,7 +425,8 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
 
         // Read the pixels, making sure to invert the y axis.
         unsafe {
-            self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
+            self.context
+                .bind_texture(glow::TEXTURE_2D, Some(texture.texture));
             let _guard = CallOnDrop(|| {
                 self.context.bind_texture(glow::TEXTURE_2D, None);
             });
@@ -404,7 +443,7 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
             );
         }
 
-        gl_error(&self.context);
+        gl_error(&*self.context);
 
         // Invert the y axis, making sure to use the little bit at the end of the buffer as
         // temporary storage.
@@ -420,7 +459,8 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
 
         // Upload the pixels to the texture.
         unsafe {
-            self.context.bind_texture(glow::TEXTURE_2D, Some(texture.0));
+            self.context
+                .bind_texture(glow::TEXTURE_2D, Some(texture.texture));
             let _guard = CallOnDrop(|| {
                 self.context.bind_texture(glow::TEXTURE_2D, None);
             });
@@ -441,14 +481,14 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
         Ok(())
     }
 
-    fn max_texture_size(&self) -> (u32, u32) {
+    fn max_texture_size(&mut self, _: &()) -> (u32, u32) {
         unsafe {
             let size = self.context.get_parameter_i32(glow::MAX_TEXTURE_SIZE);
             (size as u32, size as u32)
         }
     }
 
-    fn create_vertex_buffer(&self) -> Result<Self::VertexBuffer, Self::Error> {
+    fn create_vertex_buffer(&mut self, _: &()) -> Result<Self::VertexBuffer, Self::Error> {
         use piet_hardware::Vertex;
 
         unsafe {
@@ -502,9 +542,10 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
                 );
             }
 
-            gl_error(&self.context);
+            gl_error(&*self.context);
 
             Ok(GlVertexBuffer {
+                context: self.context.clone(),
                 vbo,
                 ebo,
                 vao,
@@ -513,16 +554,10 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
         }
     }
 
-    fn delete_vertex_buffer(&self, buffer: Self::VertexBuffer) {
-        unsafe {
-            self.context.delete_buffer(buffer.vbo);
-            self.context.delete_buffer(buffer.ebo);
-            self.context.delete_vertex_array(buffer.vao);
-        }
-    }
-
     fn write_vertices(
-        &self,
+        &mut self,
+        _: &(),
+        _: &(),
         buffer: &Self::VertexBuffer,
         vertices: &[piet_hardware::Vertex],
         indices: &[u32],
@@ -552,14 +587,16 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
                 glow::DYNAMIC_DRAW,
             );
 
-            gl_error(&self.context);
+            gl_error(&*self.context);
 
             buffer.num_indices.set(indices.len());
         }
     }
 
     fn push_buffers(
-        &self,
+        &mut self,
+        _: &(),
+        _: &(),
         vertex_buffer: &Self::VertexBuffer,
         current_texture: &Self::Texture,
         mask_texture: &Self::Texture,
@@ -603,14 +640,14 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
             // Set the image texture.
             self.context.active_texture(glow::TEXTURE1);
             self.context
-                .bind_texture(glow::TEXTURE_2D, Some(current_texture.0));
+                .bind_texture(glow::TEXTURE_2D, Some(current_texture.texture));
             self.context
                 .uniform_1_i32(Some(self.uniform(ImageTexture)), 1);
 
             // Set the mask texture.
             self.context.active_texture(glow::TEXTURE0);
             self.context
-                .bind_texture(glow::TEXTURE_2D, Some(mask_texture.0));
+                .bind_texture(glow::TEXTURE_2D, Some(mask_texture.texture));
             self.context
                 .uniform_1_i32(Some(self.uniform(MaskTexture)), 0);
 
@@ -633,7 +670,7 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
                 0,
             );
 
-            gl_error(&self.context);
+            gl_error(&*self.context);
 
             Ok(())
         }
@@ -642,8 +679,8 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
 
 /// A wrapper around a [`glow`] context with cached information.
 pub struct GlContext<H: HasContext + ?Sized> {
-    source: piet_hardware::Source<GpuContext<H>>,
     text: Text,
+    source: piet_hardware::Source<GpuContext<H>>,
 }
 
 impl<H: HasContext + ?Sized> GlContext<H> {
@@ -710,12 +747,16 @@ impl<H: HasContext + ?Sized> GlContext<H> {
                 .supported_extensions()
                 .contains("GL_KHR_robust_buffer_access_behavior");
 
-        piet_hardware::Source::new(GpuContext {
-            context,
-            uniforms,
-            check_indices: !robust_buffer,
-            render_program: program,
-        })
+        piet_hardware::Source::new(
+            GpuContext {
+                context: Rc::new(context),
+                uniforms,
+                check_indices: !robust_buffer,
+                render_program: program,
+            },
+            &(),
+            &(),
+        )
         .map(|source| GlContext {
             text: Text(source.text().clone()),
             source,
@@ -735,7 +776,7 @@ impl<H: HasContext + ?Sized> GlContext<H> {
     /// [`piet::RenderContext`] methods.
     pub unsafe fn render_context(&mut self, width: u32, height: u32) -> RenderContext<'_, H> {
         RenderContext {
-            context: self.source.render_context(width, height),
+            context: self.source.render_context(&(), &(), width, height),
             text: &mut self.text,
         }
     }
@@ -743,7 +784,7 @@ impl<H: HasContext + ?Sized> GlContext<H> {
 
 /// The whole point.
 pub struct RenderContext<'a, H: HasContext + ?Sized> {
-    context: piet_hardware::RenderContext<'a, GpuContext<H>>,
+    context: piet_hardware::RenderContext<'a, 'static, 'static, GpuContext<H>>,
     text: &'a mut Text,
 }
 

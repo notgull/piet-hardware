@@ -29,37 +29,20 @@ use piet::{
 };
 use tiny_skia::{Paint, Pixmap, Shader};
 
-use std::rc::Rc;
-
 macro_rules! define_resource_wrappers {
-    ($($name:ident($res:ident => $delete:ident)),* $(,)?) => {
+    ($($name:ident($res:ident)),* $(,)?) => {
         $(
             pub(crate) struct $name<C: GpuContext + ?Sized> {
-                context: Rc<C>,
-                resource: Option<C::$res>,
-            }
-
-            impl<C: GpuContext + ?Sized> Drop for $name<C> {
-                fn drop(&mut self) {
-                    if let Some(resource) = self.resource.take() {
-                        self.context.$delete(resource);
-                    }
-                }
+                resource: C::$res,
             }
 
             impl<C: GpuContext + ?Sized> $name<C> {
-                pub(crate) fn from_raw(
-                    context: &Rc<C>,
-                    resource: C::$res,
-                ) -> Self {
-                    Self {
-                        context: context.clone(),
-                        resource: Some(resource),
-                    }
+                pub(crate) fn from_raw(resource: C::$res) -> Self {
+                    Self { resource }
                 }
 
                 pub(crate) fn resource(&self) -> &C::$res {
-                    self.resource.as_ref().unwrap()
+                    &self.resource
                 }
             }
         )*
@@ -67,23 +50,27 @@ macro_rules! define_resource_wrappers {
 }
 
 define_resource_wrappers! {
-    Texture(Texture => delete_texture),
-    VertexBuffer(VertexBuffer => delete_vertex_buffer),
+    Texture(Texture),
+    VertexBuffer(VertexBuffer),
 }
 
 impl<C: GpuContext + ?Sized> Texture<C> {
     pub(crate) fn new(
-        context: &Rc<C>,
+        context: &mut C,
+        device: &C::Device,
         interpolation: InterpolationMode,
         repeat: RepeatStrategy,
     ) -> Result<Self, C::Error> {
-        let resource = context.create_texture(interpolation, repeat)?;
+        let resource = context.create_texture(device, interpolation, repeat)?;
 
-        Ok(Self::from_raw(context, resource))
+        Ok(Self::from_raw(resource))
     }
 
     pub(crate) fn write_linear_gradient(
         &self,
+        context: &mut C,
+        device: &C::Device,
+        queue: &C::Queue,
         gradient: &FixedLinearGradient,
         size: Size,
         offset: Vec2,
@@ -101,13 +88,16 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         )
         .ok_or_else(|| Pierror::BackendError("Invalid error".into()))?;
 
-        self.write_shader(shader, size);
+        self.write_shader(context, device, queue, shader, size);
 
         Ok(())
     }
 
     pub(crate) fn write_radial_gradient(
         &self,
+        context: &mut C,
+        device: &C::Device,
+        queue: &C::Queue,
         gradient: &FixedRadialGradient,
         size: Size,
         offset: Vec2,
@@ -126,12 +116,19 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         )
         .ok_or_else(|| Pierror::BackendError("Invalid error".into()))?;
 
-        self.write_shader(shader, size);
+        self.write_shader(context, device, queue, shader, size);
 
         Ok(())
     }
 
-    pub(crate) fn write_shader(&self, shader: Shader<'_>, size: Size) {
+    pub(crate) fn write_shader(
+        &self,
+        context: &mut C,
+        device: &C::Device,
+        queue: &C::Queue,
+        shader: Shader<'_>,
+        size: Size,
+    ) {
         // Create a pixmap to render the shader into.
         if approx_eq(size.width as f32, 0.0) || approx_eq(size.height as f32, 0.0) {
             return;
@@ -155,48 +152,67 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         // Write the pixmap into the texture.
         let data = pixmap.take();
         self.write_texture(
+            context,
+            device,
+            queue,
             (size.width as _, size.height as _),
             piet::ImageFormat::RgbaPremul,
             Some(&data),
         );
-        self.set_interpolation(InterpolationMode::Bilinear);
+        self.set_interpolation(context, device, InterpolationMode::Bilinear);
     }
 
     pub(crate) fn write_texture(
         &self,
+        context: &mut C,
+        device: &C::Device,
+        queue: &C::Queue,
         size: (u32, u32),
         format: piet::ImageFormat,
         data: Option<&[u8]>,
     ) {
-        self.context
-            .write_texture(self.resource(), size, format, data);
+        context.write_texture(device, queue, self.resource(), size, format, data);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn write_subtexture(
         &self,
+        context: &mut C,
+        device: &C::Device,
+        queue: &C::Queue,
         offset: (u32, u32),
         size: (u32, u32),
         format: piet::ImageFormat,
         data: &[u8],
     ) {
-        self.context
-            .write_subtexture(self.resource(), offset, size, format, data);
+        context.write_subtexture(device, queue, self.resource(), offset, size, format, data);
     }
 
-    pub(crate) fn set_interpolation(&self, interpolation: InterpolationMode) {
-        self.context
-            .set_texture_interpolation(self.resource(), interpolation);
+    pub(crate) fn set_interpolation(
+        &self,
+        context: &mut C,
+        device: &C::Device,
+        interpolation: InterpolationMode,
+    ) {
+        context.set_texture_interpolation(device, self.resource(), interpolation);
     }
 }
 
 impl<C: GpuContext + ?Sized> VertexBuffer<C> {
-    pub(crate) fn new(context: &Rc<C>) -> Result<Self, C::Error> {
-        let resource = context.create_vertex_buffer()?;
-        Ok(Self::from_raw(context, resource))
+    pub(crate) fn new(context: &mut C, device: &C::Device) -> Result<Self, C::Error> {
+        let resource = context.create_vertex_buffer(device)?;
+        Ok(Self::from_raw(resource))
     }
 
-    pub(crate) fn upload(&self, data: &[Vertex], indices: &[u32]) {
-        self.context.write_vertices(self.resource(), data, indices)
+    pub(crate) fn upload(
+        &self,
+        context: &mut C,
+        device: &C::Device,
+        queue: &C::Queue,
+        data: &[Vertex],
+        indices: &[u32],
+    ) {
+        context.write_vertices(device, queue, self.resource(), data, indices)
     }
 }
 

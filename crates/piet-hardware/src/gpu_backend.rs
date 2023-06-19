@@ -28,6 +28,24 @@ use std::error::Error;
 
 /// The backend for the GPU renderer.
 pub trait GpuContext {
+    /// A "device" that can be used to render.
+    ///
+    /// This corresponds to [`Device`] in [`wgpu`] and nothing in particular in [`glow`].
+    ///
+    /// [`Device`]: wgpu::Device
+    /// [`wgpu`]: https://crates.io/crates/wgpu
+    /// [`glow`]: https://crates.io/crates/glow
+    type Device;
+
+    /// A "queue" that can be used to render.
+    ///
+    /// This corresponds to [`Queue`] in [`wgpu`] and nothing in particular in [`glow`].
+    ///
+    /// [`Queue`]: wgpu::Queue
+    /// [`wgpu`]: https://crates.io/crates/wgpu
+    /// [`glow`]: https://crates.io/crates/glow
+    type Queue;
+
     /// The type associated with a GPU texture.
     type Texture;
 
@@ -40,24 +58,24 @@ pub trait GpuContext {
     type Error: Error + 'static;
 
     /// Clear the screen with the given color.
-    fn clear(&self, color: piet::Color);
+    fn clear(&mut self, device: &Self::Device, queue: &Self::Queue, color: piet::Color);
 
     /// Flush the GPU commands.
-    fn flush(&self) -> Result<(), Self::Error>;
+    fn flush(&mut self) -> Result<(), Self::Error>;
 
     /// Create a new texture.
     fn create_texture(
-        &self,
+        &mut self,
+        device: &Self::Device,
         interpolation: InterpolationMode,
         repeat: RepeatStrategy,
     ) -> Result<Self::Texture, Self::Error>;
 
-    /// Delete a texture.
-    fn delete_texture(&self, texture: Self::Texture);
-
     /// Write an image to a texture.
     fn write_texture(
-        &self,
+        &mut self,
+        device: &Self::Device,
+        queue: &Self::Queue,
         texture: &Self::Texture,
         size: (u32, u32),
         format: piet::ImageFormat,
@@ -65,8 +83,11 @@ pub trait GpuContext {
     );
 
     /// Write a sub-image to a texture.
+    #[allow(clippy::too_many_arguments)]
     fn write_subtexture(
-        &self,
+        &mut self,
+        device: &Self::Device,
+        queue: &Self::Queue,
         texture: &Self::Texture,
         offset: (u32, u32),
         size: (u32, u32),
@@ -75,40 +96,170 @@ pub trait GpuContext {
     );
 
     /// Set the interpolation mode for a texture.
-    fn set_texture_interpolation(&self, texture: &Self::Texture, interpolation: InterpolationMode);
+    fn set_texture_interpolation(
+        &mut self,
+        device: &Self::Device,
+        texture: &Self::Texture,
+        interpolation: InterpolationMode,
+    );
 
     /// Get the maximum texture size.
-    fn max_texture_size(&self) -> (u32, u32);
+    fn max_texture_size(&mut self, device: &Self::Device) -> (u32, u32);
 
     /// Create a new vertex buffer.
-    fn create_vertex_buffer(&self) -> Result<Self::VertexBuffer, Self::Error>;
-
-    /// Delete a vertex buffer.
-    fn delete_vertex_buffer(&self, buffer: Self::VertexBuffer);
+    fn create_vertex_buffer(
+        &mut self,
+        device: &Self::Device,
+    ) -> Result<Self::VertexBuffer, Self::Error>;
 
     /// Write vertices to a vertex buffer.
     ///
     /// The indices must be valid for the vertices set; however, it is up to the GPU implementation
     /// to actually check this.
-    fn write_vertices(&self, buffer: &Self::VertexBuffer, vertices: &[Vertex], indices: &[u32]);
+    fn write_vertices(
+        &mut self,
+        device: &Self::Device,
+        queue: &Self::Queue,
+        buffer: &Self::VertexBuffer,
+        vertices: &[Vertex],
+        indices: &[u32],
+    );
 
     /// Capture an area from the screen and put it into a texture.
     fn capture_area(
-        &self,
+        &mut self,
+        device: &Self::Device,
+        queue: &Self::Queue,
         texture: &Self::Texture,
         offset: (u32, u32),
         size: (u32, u32),
     ) -> Result<(), Self::Error>;
 
     /// Push buffer data to the GPU.
+    #[allow(clippy::too_many_arguments)]
     fn push_buffers(
-        &self,
+        &mut self,
+        device: &Self::Device,
+        queue: &Self::Queue,
         vertex_buffer: &Self::VertexBuffer,
         current_texture: &Self::Texture,
         mask_texture: &Self::Texture,
         transform: &Affine,
         size: (u32, u32),
     ) -> Result<(), Self::Error>;
+}
+
+impl<C: GpuContext + ?Sized> GpuContext for &mut C {
+    type Device = C::Device;
+    type Queue = C::Queue;
+    type Texture = C::Texture;
+    type VertexBuffer = C::VertexBuffer;
+    type Error = C::Error;
+
+    fn capture_area(
+        &mut self,
+        device: &Self::Device,
+        queue: &Self::Queue,
+        texture: &Self::Texture,
+        offset: (u32, u32),
+        size: (u32, u32),
+    ) -> Result<(), Self::Error> {
+        (**self).capture_area(device, queue, texture, offset, size)
+    }
+
+    fn clear(&mut self, device: &Self::Device, queue: &Self::Queue, color: piet::Color) {
+        (**self).clear(device, queue, color)
+    }
+
+    fn create_texture(
+        &mut self,
+        device: &Self::Device,
+        interpolation: InterpolationMode,
+        repeat: RepeatStrategy,
+    ) -> Result<Self::Texture, Self::Error> {
+        (**self).create_texture(device, interpolation, repeat)
+    }
+
+    fn create_vertex_buffer(
+        &mut self,
+        device: &Self::Device,
+    ) -> Result<Self::VertexBuffer, Self::Error> {
+        (**self).create_vertex_buffer(device)
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        (**self).flush()
+    }
+
+    fn max_texture_size(&mut self, device: &Self::Device) -> (u32, u32) {
+        (**self).max_texture_size(device)
+    }
+
+    fn push_buffers(
+        &mut self,
+        device: &Self::Device,
+        queue: &Self::Queue,
+        vertex_buffer: &Self::VertexBuffer,
+        current_texture: &Self::Texture,
+        mask_texture: &Self::Texture,
+        transform: &Affine,
+        size: (u32, u32),
+    ) -> Result<(), Self::Error> {
+        (**self).push_buffers(
+            device,
+            queue,
+            vertex_buffer,
+            current_texture,
+            mask_texture,
+            transform,
+            size,
+        )
+    }
+
+    fn set_texture_interpolation(
+        &mut self,
+        device: &Self::Device,
+        texture: &Self::Texture,
+        interpolation: InterpolationMode,
+    ) {
+        (**self).set_texture_interpolation(device, texture, interpolation)
+    }
+
+    fn write_subtexture(
+        &mut self,
+        device: &Self::Device,
+        queue: &Self::Queue,
+        texture: &Self::Texture,
+        offset: (u32, u32),
+        size: (u32, u32),
+        format: piet::ImageFormat,
+        data: &[u8],
+    ) {
+        (**self).write_subtexture(device, queue, texture, offset, size, format, data)
+    }
+
+    fn write_texture(
+        &mut self,
+        device: &Self::Device,
+        queue: &Self::Queue,
+        texture: &Self::Texture,
+        size: (u32, u32),
+        format: piet::ImageFormat,
+        data: Option<&[u8]>,
+    ) {
+        (**self).write_texture(device, queue, texture, size, format, data)
+    }
+
+    fn write_vertices(
+        &mut self,
+        device: &Self::Device,
+        queue: &Self::Queue,
+        buffer: &Self::VertexBuffer,
+        vertices: &[Vertex],
+        indices: &[u32],
+    ) {
+        (**self).write_vertices(device, queue, buffer, vertices, indices)
+    }
 }
 
 /// The strategy to use for repeating.
@@ -123,51 +274,6 @@ pub enum RepeatStrategy {
 
     /// Don't repeat and instead use this color.
     Color(piet::Color),
-}
-
-/// The format to be provided to the vertex array.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
-pub struct VertexFormat {
-    /// The data type associated with the position.
-    pub data_type: DataType,
-
-    /// The data format associated with the position.
-    pub format: DataFormat,
-
-    /// The number of components in the position.
-    pub num_components: u32,
-
-    /// The offset of the position in the vertex.
-    pub offset: u32,
-
-    /// The stride of the vertex.
-    pub stride: u32,
-}
-
-/// The data format associated with a vertex array.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
-pub enum DataFormat {
-    /// Uses floats.
-    Float,
-
-    /// Uses unsigned bytes.
-    UnsignedByte,
-}
-
-/// The type of the data component.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
-pub enum DataType {
-    /// This represents the location of the component, in screen space.
-    Position,
-
-    /// This represents the location of the component, in texture space (0..1).
-    Texture,
-
-    /// This represents the color of the component.
-    Color,
 }
 
 /// The vertex type used by the GPU renderer.

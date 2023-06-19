@@ -29,7 +29,6 @@ use piet::kurbo::{Affine, Shape};
 use piet::{Error as Pierror, InterpolationMode};
 
 use std::mem;
-use std::rc::Rc;
 
 use tiny_skia::{FillRule, Mask as ClipMask, PathBuilder, Pixmap};
 
@@ -78,7 +77,8 @@ impl<C: GpuContext + ?Sized> MaskSlot<C> {
     /// Draw a shape into the mask.
     pub(crate) fn clip(
         &mut self,
-        context: &Rc<C>,
+        context: &mut C,
+        device: &C::Device,
         shape: impl Shape,
         tolerance: f64,
         transform: Affine,
@@ -108,6 +108,7 @@ impl<C: GpuContext + ?Sized> MaskSlot<C> {
                     Some(texture) => texture,
                     None => Texture::new(
                         context,
+                        device,
                         InterpolationMode::Bilinear,
                         RepeatStrategy::Color(piet::Color::TRANSPARENT),
                     )
@@ -133,9 +134,14 @@ impl<C: GpuContext + ?Sized> MaskSlot<C> {
     }
 
     /// Get the texture for this mask.
-    pub(crate) fn texture(&mut self) -> Result<Option<&Texture<C>>, Pierror> {
+    pub(crate) fn texture(
+        &mut self,
+        context: &mut C,
+        device: &C::Device,
+        queue: &C::Queue,
+    ) -> Result<Option<&Texture<C>>, Pierror> {
         match self.slot {
-            MaskSlotState::Mask(ref mut mask) => mask.upload().map(Some),
+            MaskSlotState::Mask(ref mut mask) => mask.upload(context, device, queue).map(Some),
 
             MaskSlotState::Empty(_) => Ok(None),
         }
@@ -158,7 +164,12 @@ struct Mask<C: GpuContext + ?Sized> {
 
 impl<C: GpuContext + ?Sized> Mask<C> {
     /// Upload the mask to the texture.
-    fn upload(&mut self) -> Result<&Texture<C>, Pierror> {
+    fn upload(
+        &mut self,
+        context: &mut C,
+        device: &C::Device,
+        queue: &C::Queue,
+    ) -> Result<&Texture<C>, Pierror> {
         if self.dirty {
             // First, clear the pixmap.
             self.pixmap.fill(tiny_skia::Color::from_rgba8(0, 0, 0, 0));
@@ -187,6 +198,9 @@ impl<C: GpuContext + ?Sized> Mask<C> {
             // Finally, upload the pixmap to the texture.
             let data = self.pixmap.data();
             self.texture.write_texture(
+                context,
+                device,
+                queue,
                 (self.pixmap.width(), self.pixmap.height()),
                 piet::ImageFormat::RgbaSeparate,
                 Some(data),

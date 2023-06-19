@@ -76,17 +76,29 @@ struct Position {
 
 impl<C: GpuContext + ?Sized> Atlas<C> {
     /// Create a new, empty texture atlas.
-    pub(crate) fn new(context: &Rc<C>) -> Result<Self, Pierror> {
-        let (max_width, max_height) = context.max_texture_size();
+    pub(crate) fn new(
+        context: &mut C,
+        device: &C::Device,
+        queue: &C::Queue,
+    ) -> Result<Self, Pierror> {
+        let (max_width, max_height) = context.max_texture_size(device);
         let texture = Texture::new(
             context,
+            device,
             InterpolationMode::Bilinear,
             RepeatStrategy::Color(piet::Color::TRANSPARENT),
         )
         .piet_err()?;
 
         // Initialize the texture to be transparent.
-        texture.write_texture((max_width, max_height), piet::ImageFormat::RgbaPremul, None);
+        texture.write_texture(
+            context,
+            device,
+            queue,
+            (max_width, max_height),
+            piet::ImageFormat::RgbaPremul,
+            None,
+        );
 
         Ok(Atlas {
             texture: Rc::new(texture),
@@ -107,6 +119,9 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
     /// This function rasterizes the glyph if it isn't already cached.
     pub(crate) fn uv_rect(
         &mut self,
+        context: &mut C,
+        device: &C::Device,
+        queue: &C::Queue,
         glyph: &LayoutGlyph,
         font_system: &mut FontSystem,
     ) -> Result<GlyphData, Pierror> {
@@ -200,6 +215,9 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
 
                 // Insert the glyph into the texture.
                 self.texture.write_subtexture(
+                    context,
+                    device,
+                    queue,
                     (alloc.rectangle.min.x as u32, alloc.rectangle.min.y as u32),
                     (width, height),
                     piet::ImageFormat::RgbaPremul,

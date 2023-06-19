@@ -29,47 +29,65 @@
 //!
 //! This system is far from elegant. Any suggestions for improvement are welcome!
 
-use super::{DeviceAndQueue, GpuContext};
 use piet_hardware::Vertex;
 
 use std::cell::{Ref, RefCell, RefMut};
+use std::hash::{Hash, Hasher};
 use std::mem;
 use std::rc::Rc;
 
 /// The resource representing a WGPU buffer.
 #[derive(Clone)]
-pub(crate) struct WgpuVertexBuffer(Rc<BufferInner>);
+pub(crate) struct WgpuVertexBuffer(Rc<VertexBufferInner>);
+
+// Comparisons occur by pointer.
+impl PartialEq for WgpuVertexBuffer {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for WgpuVertexBuffer {}
+
+impl Hash for WgpuVertexBuffer {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Rc::as_ptr(&self.0).hash(state);
+    }
+}
+
+struct VertexBufferInner {
+    /// The vertex buffer.
+    vertex_buffer: RefCell<Buffer>,
+
+    /// The index buffer.
+    index_buffer: RefCell<Buffer>,
+}
 
 impl WgpuVertexBuffer {
     /// Create a new vertex buffer.
-    pub(crate) fn new<DaQ: DeviceAndQueue + ?Sized>(base: &GpuContext<DaQ>) -> Self {
+    pub(crate) fn new([id1, id2]: [usize; 2], device: &wgpu::Device) -> Self {
         const INITIAL_VERTEX_BUFFER_SIZE: usize = 1024 * mem::size_of::<Vertex>();
         const INITIAL_INDEX_BUFFER_SIZE: usize = 1024 * mem::size_of::<u32>();
 
         let vertex_buffer = Buffer::new(
-            base,
+            id1,
+            device,
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             INITIAL_VERTEX_BUFFER_SIZE,
             "vertex",
         );
         let index_buffer = Buffer::new(
-            base,
+            id2,
+            device,
             wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             INITIAL_INDEX_BUFFER_SIZE,
             "index",
         );
 
-        WgpuVertexBuffer(Rc::new(BufferInner {
-            id: base.next_id(),
+        WgpuVertexBuffer(Rc::new(VertexBufferInner {
             vertex_buffer: RefCell::new(vertex_buffer),
             index_buffer: RefCell::new(index_buffer),
         }))
-    }
-
-    /// Get the ID of this buffer set.
-    #[inline]
-    pub(crate) fn id(&self) -> usize {
-        self.0.id
     }
 
     /// Borrow the vertex buffer.
@@ -91,18 +109,6 @@ impl WgpuVertexBuffer {
     pub(crate) fn borrow_index_buffer_mut(&self) -> RefMut<'_, Buffer> {
         self.0.index_buffer.borrow_mut()
     }
-}
-
-/// Inner data for a buffer.
-struct BufferInner {
-    /// Unique ID.
-    id: usize,
-
-    /// The buffer for vertices.
-    vertex_buffer: RefCell<Buffer>,
-
-    /// The buffer for indices.
-    index_buffer: RefCell<Buffer>,
 }
 
 /// Describes the data for a buffer.
@@ -147,12 +153,12 @@ pub(crate) struct Buffer {
 /// This is used to dynamically reallocate new buffers during rendering.
 enum BufferCollection {
     /// A single buffer.
-    Single(wgpu::Buffer),
+    Single(Rc<wgpu::Buffer>),
 
     /// A list of buffers.
     ///
     /// This is only used when the single buffer overflows.
-    List(Vec<wgpu::Buffer>),
+    List(Vec<Rc<wgpu::Buffer>>),
 
     /// Empty hole.
     Hole,
@@ -160,7 +166,7 @@ enum BufferCollection {
 
 impl BufferCollection {
     /// Get the buffer at the given index.
-    fn get(&self, i: usize) -> Option<&wgpu::Buffer> {
+    fn get(&self, i: usize) -> Option<&Rc<wgpu::Buffer>> {
         match (self, i) {
             (BufferCollection::Single(buffer), 0) => Some(buffer),
             (BufferCollection::List(buffers), i) => buffers.get(i),
@@ -169,7 +175,7 @@ impl BufferCollection {
     }
 
     /// Get the last buffer.
-    fn last(&self) -> Option<&wgpu::Buffer> {
+    fn last(&self) -> Option<&Rc<wgpu::Buffer>> {
         match self {
             BufferCollection::Single(buffer) => Some(buffer),
             BufferCollection::List(buffers) => buffers.last(),
@@ -178,7 +184,7 @@ impl BufferCollection {
     }
 
     /// Get the last buffer, mutably.
-    fn last_mut(&mut self) -> Option<&mut wgpu::Buffer> {
+    fn last_mut(&mut self) -> Option<&mut Rc<wgpu::Buffer>> {
         match self {
             BufferCollection::Single(buffer) => Some(buffer),
             BufferCollection::List(buffers) => buffers.last_mut(),
@@ -188,6 +194,7 @@ impl BufferCollection {
 
     /// Push a new buffer.
     fn push(&mut self, buffer: wgpu::Buffer) {
+        let buffer = Rc::new(buffer);
         match mem::replace(self, Self::Hole) {
             Self::Hole => *self = Self::Single(buffer),
             Self::Single(old_buffer) => {
@@ -209,18 +216,6 @@ impl BufferCollection {
             _ => 0,
         }
     }
-
-    /// Get a slice of the buffer.
-    pub(crate) fn slice(
-        &self,
-        slice: BufferSlice,
-        granularity: u64,
-    ) -> Option<wgpu::BufferSlice<'_>> {
-        let map_end = |end| end / granularity;
-        let new_range = map_end(slice.range.0)..map_end(slice.range.1);
-
-        self.get(slice.buffer_index).map(|buf| buf.slice(new_range))
-    }
 }
 
 /// A slice out of the `BufferCollection`.
@@ -234,9 +229,9 @@ pub(crate) struct BufferSlice {
 }
 
 impl BufferSlice {
-    /// Get the length of this slice.
-    pub(crate) fn len(&self) -> usize {
-        (self.range.1 - self.range.0).try_into().unwrap()
+    /// Get the range of this slice.
+    pub(crate) fn range(&self) -> std::ops::Range<u64> {
+        self.range.0..self.range.1
     }
 }
 
@@ -252,11 +247,7 @@ impl Buffer {
     }
 
     /// Write this data into the buffer.
-    pub(crate) fn write_buffer<DaQ: DeviceAndQueue + ?Sized>(
-        &mut self,
-        base: &GpuContext<DaQ>,
-        data: &[u8],
-    ) {
+    pub(crate) fn write_buffer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, data: &[u8]) {
         // See if we need to allocate a new buffer.
         let remaining_capacity = self.last_capacity - self.end_cursor;
         if remaining_capacity < data.len() {
@@ -266,11 +257,11 @@ impl Buffer {
                 .checked_add(remaining_capacity)
                 .map(|len| len.next_power_of_two())
                 .expect("buffer too large");
-            let new_buffer = self.create_buffer(base.device_and_queue().device(), new_capacity);
+            let new_buffer = self.create_buffer(device, new_capacity);
 
             // If we haven't sliced out this buffer yet, just reallocate in place.
             if self.start_cursor == 0 {
-                *self.buffer.last_mut().unwrap() = new_buffer;
+                *self.buffer.last_mut().unwrap() = Rc::new(new_buffer);
                 self.capacity -= self.last_capacity;
             } else {
                 // Push the buffer to the end.
@@ -284,7 +275,7 @@ impl Buffer {
         }
 
         // Queue the write to the buffer.
-        base.device_and_queue().queue().write_buffer(
+        queue.write_buffer(
             self.buffer.last().unwrap(),
             self.start_cursor.try_into().expect("buffer too large"),
             data,
@@ -326,22 +317,23 @@ impl Buffer {
             let desired_capacity = self.capacity.next_power_of_two();
             tracing::debug!("Resizing {} buffer to {}", self.buffer_id, desired_capacity);
             let new_buffer = self.create_buffer(device, desired_capacity);
-            self.buffer = BufferCollection::Single(new_buffer);
+            self.buffer = BufferCollection::Single(Rc::new(new_buffer));
             self.capacity = desired_capacity;
             self.last_capacity = desired_capacity;
         }
     }
 
     /// Create a new buffer.
-    fn new<DaQ: DeviceAndQueue + ?Sized>(
-        base: &GpuContext<DaQ>,
+    fn new(
+        id: usize,
+        device: &wgpu::Device,
         usage: wgpu::BufferUsages,
         starting_size: usize,
         buffer_id: &'static str,
     ) -> Self {
         let starting_size = starting_size.next_power_of_two();
         let mut this = Self {
-            id: base.next_id(),
+            id,
             capacity: starting_size,
             last_capacity: starting_size,
             start_cursor: 0,
@@ -351,14 +343,12 @@ impl Buffer {
             buffer: BufferCollection::Hole,
         };
 
-        this.buffer = BufferCollection::Single(
-            this.create_buffer(base.device_and_queue().device(), starting_size),
-        );
+        this.buffer = BufferCollection::Single(Rc::new(this.create_buffer(device, starting_size)));
         this
     }
 
-    /// Get a slice of this buffer.
-    pub(crate) fn slice(&self, buffer_slice: BufferSlice) -> Option<wgpu::BufferSlice<'_>> {
-        self.buffer.slice(buffer_slice, 1)
+    /// Get the buffer at this index.
+    pub(crate) fn get(&self, slice: BufferSlice) -> Option<&Rc<wgpu::Buffer>> {
+        self.buffer.get(slice.buffer_index)
     }
 }
