@@ -184,7 +184,7 @@ impl<C: GpuContext + ?Sized> Source<C> {
             size: (width, height),
             state: TinyVec::from([RenderState::default()]),
             status: Ok(()),
-            tolerance: 1.0,
+            tolerance: 0.1,
         }
     }
 

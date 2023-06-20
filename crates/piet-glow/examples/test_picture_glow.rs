@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             CONTEXT.with(move |slot| *slot.borrow_mut() = Some(context));
 
             samples::samples_main(
-                |number, _scale, path| {
+                |number, scale, path| {
                     CONTEXT.with(|slot| {
                         let mut guard = slot.borrow_mut();
                         let context = guard.as_mut().unwrap();
@@ -65,6 +65,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let picture = samples::get(number)?;
                         let size = picture.size();
 
+                        let scaled_width = (size.width * scale) as u32;
+                        let scaled_height = (size.height * scale) as u32;
+
                         // Create a texture to render into.
                         let ctx = context.context();
                         let texture = unsafe {
@@ -74,8 +77,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 glow::TEXTURE_2D,
                                 0,
                                 glow::RGBA as i32,
-                                size.width as i32,
-                                size.height as i32,
+                                scaled_width as i32,
+                                scaled_height as i32,
                                 0,
                                 glow::RGBA,
                                 glow::UNSIGNED_BYTE,
@@ -125,8 +128,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ctx.renderbuffer_storage(
                                 glow::RENDERBUFFER,
                                 glow::DEPTH_COMPONENT16,
-                                size.width as i32,
-                                size.height as i32,
+                                scaled_width as i32,
+                                scaled_height as i32,
                             );
                             ctx.framebuffer_renderbuffer(
                                 glow::FRAMEBUFFER,
@@ -145,22 +148,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         };
 
                         // Create a piet-glow render context.
-                        let mut rc = unsafe {
-                            context.render_context(size.width as u32, size.height as u32)
-                        };
+                        let mut rc = unsafe { context.render_context(scaled_width, scaled_height) };
+                        piet::RenderContext::transform(&mut rc, piet::kurbo::Affine::scale(scale));
 
                         // Draw with the context.
                         picture.draw(&mut rc)?;
 
                         // Get the data out of the texture.
                         let ctx = context.context();
-                        let mut data = vec![0; size.width as usize * size.height as usize * 4];
+                        let mut data = vec![0; scaled_width as usize * scaled_height as usize * 4];
                         unsafe {
                             ctx.read_pixels(
                                 0,
                                 0,
-                                size.width as i32,
-                                size.height as i32,
+                                scaled_width as i32,
+                                scaled_height as i32,
                                 glow::RGBA,
                                 glow::UNSIGNED_BYTE,
                                 glow::PixelPackData::Slice(&mut data),
@@ -169,8 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         // Write the data to a file.
                         let mut img =
-                            image::RgbaImage::from_vec(size.width as u32, size.height as u32, data)
-                                .unwrap();
+                            image::RgbaImage::from_vec(scaled_width, scaled_height, data).unwrap();
 
                         // Flip it around.
                         image::imageops::flip_vertical_in_place(&mut img);
