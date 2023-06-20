@@ -654,7 +654,13 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
             // Enable blending.
             self.context.enable(glow::BLEND);
             self.context
-                .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+                .blend_equation_separate(glow::FUNC_ADD, glow::FUNC_ADD);
+            self.context.blend_func_separate(
+                glow::SRC_ALPHA,
+                glow::ONE_MINUS_SRC_ALPHA,
+                glow::ONE,
+                glow::ONE_MINUS_SRC_ALPHA,
+            );
 
             // Set the vertex array.
             self.context.bind_vertex_array(Some(vertex_buffer.vao));
