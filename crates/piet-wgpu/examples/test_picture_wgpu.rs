@@ -64,7 +64,7 @@ async fn entry() -> ! {
 
     // Call the samples main.
     samples::samples_main(
-        |number, _scale, path| {
+        |number, scale, path| {
             DEVICE_AND_QUEUE.with(|daq| {
                 let mut guard = daq.borrow_mut();
                 let state = guard.as_mut().unwrap();
@@ -81,8 +81,11 @@ async fn entry() -> ! {
                 let picture = samples::get(number)?;
                 let size = picture.size();
 
+                let scaled_width = (size.width * scale) as u32;
+                let scaled_height = (size.height * scale) as u32;
+
                 // Create a texture to render into.
-                let dims = BufferDimensions::new(size.width as _, size.height as _);
+                let dims = BufferDimensions::new(scaled_width as usize, scaled_height as usize);
                 let texture = device.create_texture(&wgpu::TextureDescriptor {
                     label: Some(&format!("sample output for #{number}")),
                     size: wgpu::Extent3d {
@@ -108,7 +111,8 @@ async fn entry() -> ! {
                 });
 
                 // Create the render context.
-                let mut rc = context.prepare(device, queue, size.width as _, size.height as _);
+                let mut rc = context.prepare(device, queue, dims.width as u32, dims.height as u32);
+                piet::RenderContext::transform(&mut rc, piet::kurbo::Affine::scale(scale));
 
                 // Draw the picture.
                 picture.draw(&mut rc)?;

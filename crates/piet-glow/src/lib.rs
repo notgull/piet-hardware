@@ -661,6 +661,7 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
                 glow::ONE,
                 glow::ONE_MINUS_SRC_ALPHA,
             );
+            self.context.enable(glow::MULTISAMPLE);
 
             // Set the vertex array.
             self.context.bind_vertex_array(Some(vertex_buffer.vao));
