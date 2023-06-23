@@ -71,6 +71,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Create a texture to render into.
                         let ctx = context.context();
                         let texture = unsafe {
+                            ctx.enable(glow::MULTISAMPLE);
+                            let texture = ctx.create_texture().unwrap();
+                            ctx.bind_texture(glow::TEXTURE_2D_MULTISAMPLE, Some(texture));
+                            ctx.tex_image_2d_multisample(
+                                glow::TEXTURE_2D_MULTISAMPLE,
+                                16,
+                                glow::RGBA as i32,
+                                scaled_width as i32,
+                                scaled_height as i32,
+                                true,
+                            );
+                            ctx.bind_texture(glow::TEXTURE_2D_MULTISAMPLE, None);
+
+                            texture
+                        };
+
+                        // Create a normal, non-multisampled texture.
+                        let render_texture = unsafe {
                             let texture = ctx.create_texture().unwrap();
                             ctx.bind_texture(glow::TEXTURE_2D, Some(texture));
                             ctx.tex_image_2d(
@@ -97,6 +115,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 glow::LINEAR as i32,
                             );
 
+                            ctx.bind_texture(glow::TEXTURE_2D, None);
+
                             texture
                         };
 
@@ -104,10 +124,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let framebuffer = unsafe {
                             let framebuffer = ctx.create_framebuffer().unwrap();
                             ctx.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
+                            ctx.bind_texture(glow::TEXTURE_2D_MULTISAMPLE, Some(texture));
                             ctx.framebuffer_texture_2d(
                                 glow::FRAMEBUFFER,
                                 glow::COLOR_ATTACHMENT0,
-                                glow::TEXTURE_2D,
+                                glow::TEXTURE_2D_MULTISAMPLE,
                                 Some(texture),
                                 0,
                             );
@@ -115,18 +136,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Check that the framebuffer is complete.
                             assert_eq!(
                                 ctx.check_framebuffer_status(glow::FRAMEBUFFER),
-                                glow::FRAMEBUFFER_COMPLETE
+                                glow::FRAMEBUFFER_COMPLETE,
+                                "main fbo"
                             );
+
+                            ctx.bind_framebuffer(glow::FRAMEBUFFER, None);
+                            ctx.bind_texture(glow::TEXTURE_2D_MULTISAMPLE, None);
 
                             framebuffer
                         };
+
+                        // Create an intermediate FBO to use with the render target texture.
+                        let intermediate_fbo = unsafe {
+                            let framebuffer = ctx.create_framebuffer().unwrap();
+                            ctx.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
+                            ctx.bind_texture(glow::TEXTURE_2D, Some(render_texture));
+                            ctx.framebuffer_texture_2d(
+                                glow::FRAMEBUFFER,
+                                glow::COLOR_ATTACHMENT0,
+                                glow::TEXTURE_2D,
+                                Some(render_texture),
+                                0,
+                            );
+
+                            // Check that the framebuffer is complete.
+                            assert_eq!(
+                                ctx.check_framebuffer_status(glow::FRAMEBUFFER),
+                                glow::FRAMEBUFFER_COMPLETE,
+                                "intermediate fbo",
+                            );
+
+                            ctx.bind_framebuffer(glow::FRAMEBUFFER, None);
+                            ctx.bind_texture(glow::TEXTURE_2D, None);
+
+                            framebuffer
+                        };
+
+                        unsafe {
+                            ctx.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
+                        }
 
                         // Use a renderbuffer to render into the texture and make it current.
                         let renderbuffer = unsafe {
                             let renderbuffer = ctx.create_renderbuffer().unwrap();
                             ctx.bind_renderbuffer(glow::RENDERBUFFER, Some(renderbuffer));
-                            ctx.renderbuffer_storage(
+                            ctx.renderbuffer_storage_multisample(
                                 glow::RENDERBUFFER,
+                                16,
                                 glow::DEPTH_COMPONENT16,
                                 scaled_width as i32,
                                 scaled_height as i32,
@@ -154,8 +210,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Draw with the context.
                         picture.draw(&mut rc)?;
 
-                        // Get the data out of the texture.
+                        // Blit to the render target texture.
                         let ctx = context.context();
+                        unsafe {
+                            ctx.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(framebuffer));
+                            ctx.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(intermediate_fbo));
+                            ctx.blit_framebuffer(
+                                0,
+                                0,
+                                scaled_width as _,
+                                scaled_height as _,
+                                0,
+                                0,
+                                scaled_width as _,
+                                scaled_height as _,
+                                glow::COLOR_BUFFER_BIT,
+                                glow::NEAREST,
+                            );
+                            ctx.bind_framebuffer(glow::FRAMEBUFFER, Some(intermediate_fbo));
+                        }
+
+                        // Get the data out of the texture.
                         let mut data = vec![0; scaled_width as usize * scaled_height as usize * 4];
                         unsafe {
                             ctx.read_pixels(
