@@ -33,21 +33,27 @@ async fn entry() -> ! {
     let (device, queue) = adaptor
         .request_device(
             &wgpu::DeviceDescriptor {
-                features: wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER,
+                features: wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER
+                    | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
                 ..Default::default()
             },
             None,
         )
         .await
         .expect("Failed to create device");
-    let context =
-        piet_wgpu::WgpuContext::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, None, 1);
+
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let samples = 16;
+
+    let context = piet_wgpu::WgpuContext::new(&device, &queue, format, None, samples);
 
     // Sigh...
     struct WgpuState {
         context: piet_wgpu::WgpuContext,
         device: wgpu::Device,
         queue: wgpu::Queue,
+        samples: u32,
+        format: wgpu::TextureFormat,
     }
 
     std::thread_local! {
@@ -59,6 +65,8 @@ async fn entry() -> ! {
             context,
             device,
             queue,
+            samples,
+            format,
         })
     });
 
@@ -72,6 +80,8 @@ async fn entry() -> ! {
                 let context = &mut state.context;
                 let device = &state.device;
                 let queue = &state.queue;
+                let samples = state.samples;
+                let format = state.format;
 
                 if number == 12 || number == 16 {
                     return Ok(());
@@ -96,11 +106,29 @@ async fn entry() -> ! {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+                    format,
+                    view_formats: &[format],
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 });
                 let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                // Create a texture to use for MSAA.
+                let msaa_texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(&format!("msaa output for #{number}")),
+                    size: wgpu::Extent3d {
+                        width: dims.width as _,
+                        height: dims.height as _,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: samples,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    view_formats: &[format],
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                });
+                let msaa_texture_view =
+                    msaa_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
                 // Create a buffer to copy the texture into.
                 let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -118,15 +146,16 @@ async fn entry() -> ! {
                 picture.draw(&mut rc)?;
 
                 // Begin encoding commands.
-                let mut encoder =
-                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some(&format!("encoder for sample {number}")),
+                });
 
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: None,
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &texture_view,
-                            resolve_target: None,
+                            view: &msaa_texture_view,
+                            resolve_target: Some(&texture_view),
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                                 store: true,
