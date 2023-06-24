@@ -22,11 +22,10 @@
 //! The rasterizer, powered by `lyon_tessellation`.
 
 use super::gpu_backend::Vertex;
+use super::stroke::StrokeBuffer;
 use super::ResultExt;
 
 use arrayvec::ArrayVec;
-
-use tiny_skia::{PathBuilder, PathSegment};
 
 use lyon_tessellation::path::{Event, PathEvent};
 use lyon_tessellation::{
@@ -34,7 +33,7 @@ use lyon_tessellation::{
     StrokeTessellator, StrokeVertex, VertexBuffers,
 };
 
-use piet::kurbo::{BezPath, PathEl, Point, Rect, Shape};
+use piet::kurbo::{PathEl, Point, Rect, Shape};
 use piet::{Color, Error as Pierror, LineCap, LineJoin};
 
 pub(crate) struct Rasterizer {
@@ -48,7 +47,7 @@ pub(crate) struct Rasterizer {
     stroke_tessellator: StrokeTessellator,
 
     /// The buffer used for dashing paths.
-    dash_builder: Option<PathBuilder>,
+    dash_builder: Option<StrokeBuffer>,
 }
 
 impl Rasterizer {
@@ -58,7 +57,7 @@ impl Rasterizer {
             buffers: VertexBuffers::new(),
             fill_tessellator: FillTessellator::new(),
             stroke_tessellator: StrokeTessellator::new(),
-            dash_builder: Some(PathBuilder::new()),
+            dash_builder: Some(StrokeBuffer::new()),
         }
     }
 
@@ -161,40 +160,27 @@ impl Rasterizer {
         width: f64,
         style: &piet::StrokeStyle,
         cvt_vertex: impl Fn(StrokeVertex<'_, '_>) -> Vertex,
+        cvt_fill_vertex: impl Fn(FillVertex<'_>) -> Vertex,
     ) -> Result<(), Pierror> {
         // lyon_tesselation does not support dashing. If this is a dashed path, use tiny-skia
         // to calculate the dash path.
         if !style.dash_pattern.is_empty() {
-            let dash = tiny_skia::StrokeDash::new(
-                style.dash_pattern.iter().map(|&x| x as f32).collect(),
-                style.dash_offset as f32,
+            // Get the dash builder and draw to it.
+            let mut dash_builder = self.dash_builder.take().unwrap_or_default();
+            dash_builder.draw(shape, width, style, tolerance);
+
+            // Fill in this shape.
+            let result = self.fill_shape(
+                dash_builder.path_data(),
+                dash_builder.fill_rule(),
+                tolerance,
+                cvt_fill_vertex,
             );
 
-            let dashed = dash.and_then(|dash| {
-                let mut inner = self.dash_builder.take().unwrap_or_default();
-                super::shape_to_skia_path(&mut inner, &shape, tolerance);
-                let shape = inner.finish()?;
+            // Keep the path memory around.
+            self.dash_builder = Some(dash_builder);
 
-                // TODO: Find a better way of calculating the resolution scale.
-                shape.dash(&dash, 1.0)
-            });
-
-            // Try to draw the dash path; if we can't, fall back to the original path.
-            if let Some(dashed) = dashed {
-                let new_style = piet::StrokeStyle {
-                    dash_pattern: Default::default(),
-                    dash_offset: 0.0,
-                    ..style.clone()
-                };
-                let new_shape = TinySkiaPathAsShape(dashed);
-
-                let result =
-                    self.stroke_shape(&new_shape, tolerance, width, &new_style, cvt_vertex);
-
-                // Make sure to keep the path memory around.
-                self.dash_builder = Some(new_shape.0.clear());
-                return result;
-            }
+            return result;
         }
 
         // Create a new buffers builder.
@@ -365,98 +351,6 @@ fn shape_to_lyon_path(shape: &impl Shape, tolerance: f64) -> impl Iterator<Item 
         needs_close: false,
     }
     .flatten()
-}
-
-struct TinySkiaPathAsShape(tiny_skia::Path);
-
-impl TinySkiaPathAsShape {
-    fn ugly_convert_to_bezpath(&self) -> BezPath {
-        let mut path = BezPath::new();
-
-        for elem in self.0.segments() {
-            path.push(ts_pathseg_to_path_el(elem));
-        }
-
-        path
-    }
-}
-
-impl Shape for TinySkiaPathAsShape {
-    type PathElementsIter<'iter> = TinySkiaPathIter<'iter>;
-
-    fn path_elements(&self, _tolerance: f64) -> Self::PathElementsIter<'_> {
-        TinySkiaPathIter(self.0.segments())
-    }
-
-    fn area(&self) -> f64 {
-        self.ugly_convert_to_bezpath().area()
-    }
-
-    fn perimeter(&self, accuracy: f64) -> f64 {
-        self.ugly_convert_to_bezpath().perimeter(accuracy)
-    }
-
-    fn winding(&self, pt: kurbo::Point) -> i32 {
-        self.ugly_convert_to_bezpath().winding(pt)
-    }
-
-    fn bounding_box(&self) -> kurbo::Rect {
-        self.ugly_convert_to_bezpath().bounding_box()
-    }
-}
-
-struct TinySkiaPathIter<'a>(tiny_skia::PathSegmentsIter<'a>);
-
-impl Iterator for TinySkiaPathIter<'_> {
-    type Item = PathEl;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(ts_pathseg_to_path_el)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.0.size_hint()
-    }
-
-    fn count(self) -> usize {
-        self.0.count()
-    }
-
-    fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        self.0.nth(n).map(ts_pathseg_to_path_el)
-    }
-
-    fn last(self) -> Option<Self::Item> {
-        self.0.last().map(ts_pathseg_to_path_el)
-    }
-
-    fn collect<B: std::iter::FromIterator<Self::Item>>(self) -> B {
-        self.0.map(ts_pathseg_to_path_el).collect()
-    }
-
-    fn fold<Acc, G>(self, init: Acc, mut g: G) -> Acc
-    where
-        G: FnMut(Acc, Self::Item) -> Acc,
-    {
-        self.0
-            .fold(init, |acc, seg| g(acc, ts_pathseg_to_path_el(seg)))
-    }
-}
-
-fn ts_pathseg_to_path_el(pathseg: PathSegment) -> PathEl {
-    match pathseg {
-        PathSegment::MoveTo(p) => PathEl::MoveTo(cvt_ts_point(p)),
-        PathSegment::LineTo(p) => PathEl::LineTo(cvt_ts_point(p)),
-        PathSegment::QuadTo(p1, p2) => PathEl::QuadTo(cvt_ts_point(p1), cvt_ts_point(p2)),
-        PathSegment::CubicTo(p1, p2, p3) => {
-            PathEl::CurveTo(cvt_ts_point(p1), cvt_ts_point(p2), cvt_ts_point(p3))
-        }
-        PathSegment::Close => PathEl::ClosePath,
-    }
-}
-
-fn cvt_ts_point(p: tiny_skia::Point) -> kurbo::Point {
-    kurbo::Point::new(p.x as f64, p.y as f64)
 }
 
 fn approx_eq(a: f64, b: f64) -> bool {

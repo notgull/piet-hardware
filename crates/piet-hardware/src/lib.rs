@@ -66,6 +66,7 @@ mod image;
 mod mask;
 mod rasterizer;
 mod resources;
+mod stroke;
 mod text;
 
 pub use self::brush::Brush;
@@ -284,6 +285,10 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, '_, '_, C> {
             self.tolerance,
             width,
             style,
+            |vert| {
+                let pos = vert.position();
+                brush.make_vertex(pos.into())
+            },
             |vert| {
                 let pos = vert.position();
                 brush.make_vertex(pos.into())
@@ -645,7 +650,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
 
     fn transform(&mut self, transform: Affine) {
         let slot = &mut self.state.last_mut().unwrap().transform;
-        *slot = transform * *slot;
+        *slot *= transform;
     }
 
     fn make_image(
