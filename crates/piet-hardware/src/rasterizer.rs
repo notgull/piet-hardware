@@ -26,7 +26,7 @@ use super::ResultExt;
 
 use arrayvec::ArrayVec;
 
-use tiny_skia::{PathBuilder, PathSegment};
+use tiny_skia::PathSegment;
 
 use lyon_tessellation::path::{Event, PathEvent};
 use lyon_tessellation::{
@@ -46,9 +46,6 @@ pub(crate) struct Rasterizer {
 
     /// The stroke tessellator.
     stroke_tessellator: StrokeTessellator,
-
-    /// The buffer used for dashing paths.
-    dash_builder: Option<PathBuilder>,
 }
 
 impl Rasterizer {
@@ -58,7 +55,6 @@ impl Rasterizer {
             buffers: VertexBuffers::new(),
             fill_tessellator: FillTessellator::new(),
             stroke_tessellator: StrokeTessellator::new(),
-            dash_builder: Some(PathBuilder::new()),
         }
     }
 
@@ -161,40 +157,35 @@ impl Rasterizer {
         width: f64,
         style: &piet::StrokeStyle,
         cvt_vertex: impl Fn(StrokeVertex<'_, '_>) -> Vertex,
+        cvt_fill_vertex: impl Fn(FillVertex<'_>) -> Vertex,
     ) -> Result<(), Pierror> {
-        // lyon_tesselation does not support dashing. If this is a dashed path, use tiny-skia
+        // lyon_tesselation does not support dashing. If this is a dashed path, use kurbo
         // to calculate the dash path.
         if !style.dash_pattern.is_empty() {
-            let dash = tiny_skia::StrokeDash::new(
-                style.dash_pattern.iter().map(|&x| x as f32).collect(),
-                style.dash_offset as f32,
-            );
+            let mut stroke = kurbo::Stroke::new(width);
+            let cap = match style.line_cap {
+                LineCap::Butt => kurbo::Cap::Butt,
+                LineCap::Round => kurbo::Cap::Round,
+                LineCap::Square => kurbo::Cap::Square,
+            };
+            stroke = stroke.with_caps(cap);
+            stroke = match style.line_join {
+                LineJoin::Bevel => stroke.with_join(kurbo::Join::Bevel),
+                LineJoin::Round => stroke.with_join(kurbo::Join::Round),
+                LineJoin::Miter { limit } => {
+                    stroke.with_miter_limit(limit).with_join(kurbo::Join::Miter)
+                }
+            };
 
-            let dashed = dash.and_then(|dash| {
-                let mut inner = self.dash_builder.take().unwrap_or_default();
-                super::shape_to_skia_path(&mut inner, &shape, tolerance);
-                let shape = inner.finish()?;
+            let mut dashes = vec![];
+            dashes.extend(style.dash_pattern.iter().copied());
 
-                // TODO: Find a better way of calculating the resolution scale.
-                shape.dash(&dash, 1.0)
-            });
+            stroke = stroke.with_dashes(style.dash_offset, dashes);
 
-            // Try to draw the dash path; if we can't, fall back to the original path.
-            if let Some(dashed) = dashed {
-                let new_style = piet::StrokeStyle {
-                    dash_pattern: Default::default(),
-                    dash_offset: 0.0,
-                    ..style.clone()
-                };
-                let new_shape = TinySkiaPathAsShape(dashed);
+            // Stroke out and fill it.
+            let filled_path = kurbo::stroke(shape.path_elements(tolerance), &stroke, tolerance);
 
-                let result =
-                    self.stroke_shape(&new_shape, tolerance, width, &new_style, cvt_vertex);
-
-                // Make sure to keep the path memory around.
-                self.dash_builder = Some(new_shape.0.clear());
-                return result;
-            }
+            return self.fill_shape(filled_path, FillRule::NonZero, tolerance, cvt_fill_vertex);
         }
 
         // Create a new buffers builder.

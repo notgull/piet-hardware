@@ -7,3 +7,6 @@ members = [
 ]
 
 resolver = "2"
+
+[patch.crates-io]
+kurbo = { git = "https://github.com/linebender/kurbo.git", branch = "stroke" }
