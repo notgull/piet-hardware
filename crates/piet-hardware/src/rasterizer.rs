@@ -176,11 +176,7 @@ impl Rasterizer {
                     stroke.with_miter_limit(limit).with_join(kurbo::Join::Miter)
                 }
             };
-
-            let mut dashes = vec![];
-            dashes.extend(style.dash_pattern.iter().copied());
-
-            stroke = stroke.with_dashes(style.dash_offset, dashes);
+            stroke = stroke.with_dashes(style.dash_offset, style.dash_pattern.iter().copied());
 
             // Stroke out and fill it.
             let filled_path = kurbo::stroke(shape.path_elements(tolerance), &stroke, tolerance);
