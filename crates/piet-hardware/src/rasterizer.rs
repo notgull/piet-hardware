@@ -182,7 +182,8 @@ impl Rasterizer {
             opts = opts.opt_level(kurbo::StrokeOptLevel::Subdivide);
 
             // Stroke out and fill it.
-            let filled_path = kurbo::stroke(shape.path_elements(tolerance), &stroke, &opts, tolerance); 
+            let filled_path =
+                kurbo::stroke(shape.path_elements(tolerance), &stroke, &opts, tolerance);
 
             return self.fill_shape(filled_path, FillRule::NonZero, tolerance, cvt_fill_vertex);
         }
