@@ -103,8 +103,8 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         offset: Vec2,
     ) -> Result<(), Pierror> {
         let shader = tiny_skia::RadialGradient::new(
+            convert_to_ts_point(gradient.center + gradient.origin_offset),
             convert_to_ts_point(gradient.center),
-            convert_to_ts_point(gradient.center - gradient.origin_offset),
             gradient.radius as f32,
             gradient
                 .stops

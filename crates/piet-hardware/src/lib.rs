@@ -288,6 +288,10 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, '_, '_, C> {
                 let pos = vert.position();
                 brush.make_vertex(pos.into())
             },
+            |vert| {
+                let pos = vert.position();
+                brush.make_vertex(pos.into())
+            },
         )?;
 
         // Push the incoming buffers.
@@ -645,7 +649,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
 
     fn transform(&mut self, transform: Affine) {
         let slot = &mut self.state.last_mut().unwrap().transform;
-        *slot = transform * *slot;
+        *slot *= transform;
     }
 
     fn make_image(

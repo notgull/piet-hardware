@@ -85,11 +85,15 @@ impl<C: GpuContext + ?Sized> Brush<C> {
         )
         .piet_err()?;
 
-        let bounds = Rect::from_points(gradient.start, gradient.end);
+        let mut bounds = Rect::from_points(gradient.start, gradient.end);
         let offset = -bounds.origin().to_vec2();
 
-        if approx_eq(bounds.width(), 0.0) || approx_eq(bounds.height(), 0.0) {
-            return Err(Pierror::InvalidInput);
+        if approx_eq(bounds.width(), 0.0) {
+            bounds.x1 += 1.0;
+        }
+
+        if approx_eq(bounds.height(), 0.0) {
+            bounds.y1 += 1.0;
         }
 
         texture.write_linear_gradient(context, device, queue, &gradient, bounds.size(), offset)?;
