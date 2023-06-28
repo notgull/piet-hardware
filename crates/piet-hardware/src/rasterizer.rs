@@ -178,8 +178,11 @@ impl Rasterizer {
             };
             stroke = stroke.with_dashes(style.dash_offset, style.dash_pattern.iter().copied());
 
+            let mut opts = kurbo::StrokeOpts::default();
+            opts = opts.opt_level(kurbo::StrokeOptLevel::Subdivide);
+
             // Stroke out and fill it.
-            let filled_path = kurbo::stroke(shape.path_elements(tolerance), &stroke, tolerance);
+            let filled_path = kurbo::stroke(shape.path_elements(tolerance), &stroke, &opts, tolerance); 
 
             return self.fill_shape(filled_path, FillRule::NonZero, tolerance, cvt_fill_vertex);
         }
