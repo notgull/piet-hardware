@@ -143,10 +143,7 @@ impl<C: GpuContext + ?Sized> Brush<C> {
                 },
             },
 
-            BrushInner::Texture {
-                transform,
-                ..
-            } => {
+            BrushInner::Texture { transform, .. } => {
                 let uv = transform * Point::new(point[0] as f64, point[1] as f64);
                 Vertex {
                     pos: point,
