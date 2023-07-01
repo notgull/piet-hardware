@@ -127,13 +127,17 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         device: &C::Device,
         queue: &C::Queue,
         shader: Shader<'_>,
-        size: Size,
+        mut size: Size,
     ) {
-        // Create a pixmap to render the shader into.
-        if approx_eq(size.width as f32, 0.0) || approx_eq(size.height as f32, 0.0) {
-            panic!("Zero size shader?");
+        // Pad the size out to at least one.
+        if (size.width as isize) < 1 {
+            size.width = 1.0;
+        }
+        if (size.height as isize) < 1 {
+            size.height = 1.0;
         }
 
+        // Create a pixmap to render the shader into.
         let mut pixmap =
             Pixmap::new(size.width as _, size.height as _).expect("failed to create pixmap");
 
@@ -231,8 +235,4 @@ fn convert_to_ts_color(color: piet::Color) -> tiny_skia::Color {
 
 fn convert_to_ts_gradient_stop(grad_stop: &GradientStop) -> tiny_skia::GradientStop {
     tiny_skia::GradientStop::new(grad_stop.pos, convert_to_ts_color(grad_stop.color))
-}
-
-fn approx_eq(a: f32, b: f32) -> bool {
-    (a - b).abs() < 0.0001
 }
