@@ -22,6 +22,7 @@
 //! The rasterizer, powered by `lyon_tessellation`.
 
 use super::gpu_backend::Vertex;
+use super::stroke::StrokeBuffer;
 use super::ResultExt;
 
 use arrayvec::ArrayVec;
@@ -46,6 +47,9 @@ pub(crate) struct Rasterizer {
 
     /// The stroke tessellator.
     stroke_tessellator: StrokeTessellator,
+
+    /// The buffer for dashing.
+    dash_buffer: Option<StrokeBuffer>,
 }
 
 impl Rasterizer {
@@ -55,6 +59,7 @@ impl Rasterizer {
             buffers: VertexBuffers::new(),
             fill_tessellator: FillTessellator::new(),
             stroke_tessellator: StrokeTessellator::new(),
+            dash_buffer: Some(StrokeBuffer::new()),
         }
     }
 
@@ -162,30 +167,23 @@ impl Rasterizer {
         // lyon_tesselation does not support dashing. If this is a dashed path, use kurbo
         // to calculate the dash path.
         if !style.dash_pattern.is_empty() {
-            let mut stroke = kurbo::Stroke::new(width);
-            let cap = match style.line_cap {
-                LineCap::Butt => kurbo::Cap::Butt,
-                LineCap::Round => kurbo::Cap::Round,
-                LineCap::Square => kurbo::Cap::Square,
-            };
-            stroke = stroke.with_caps(cap);
-            stroke = match style.line_join {
-                LineJoin::Bevel => stroke.with_join(kurbo::Join::Bevel),
-                LineJoin::Round => stroke.with_join(kurbo::Join::Round),
-                LineJoin::Miter { limit } => {
-                    stroke.with_miter_limit(limit).with_join(kurbo::Join::Miter)
-                }
-            };
-            stroke = stroke.with_dashes(style.dash_offset, style.dash_pattern.iter().copied());
+            let mut dash_buffer = self.dash_buffer.take().unwrap_or_default();
 
-            let mut opts = kurbo::StrokeOpts::default();
-            opts = opts.opt_level(kurbo::StrokeOptLevel::Subdivide);
+            // Render into the dash buffer.
+            dash_buffer.render_into(shape, width, style, tolerance);
 
-            // Stroke out and fill it.
-            let filled_path =
-                kurbo::stroke(shape.path_elements(tolerance), &stroke, &opts, tolerance);
+            // Tessellate the dash buffer.
+            let result = self.fill_shape(
+                dash_buffer.output_buffer(),
+                dash_buffer.fill_rule(),
+                tolerance,
+                cvt_fill_vertex,
+            );
 
-            return self.fill_shape(filled_path, FillRule::NonZero, tolerance, cvt_fill_vertex);
+            // Put the dash buffer back to conserve memory.
+            self.dash_buffer = Some(dash_buffer);
+
+            return result;
         }
 
         // Create a new buffers builder.
