@@ -27,7 +27,7 @@ use super::resources::Texture;
 use super::{RenderContext, ResultExt, UV_WHITE};
 
 use piet::kurbo::{Affine, Circle, Point, Rect, Shape};
-use piet::{Error as Pierror, FixedLinearGradient, FixedRadialGradient, Image as _};
+use piet::{Error as Pierror, FixedLinearGradient, FixedRadialGradient};
 
 use std::borrow::Cow;
 
@@ -49,8 +49,8 @@ enum BrushInner<C: GpuContext + ?Sized> {
         /// The image to apply.
         image: Image<C>,
 
-        /// The position to offset the gradient rectangle by.
-        offset: Point,
+        /// The transformation to translate UV texture points by.
+        transform: Affine,
     },
 }
 
@@ -85,19 +85,11 @@ impl<C: GpuContext + ?Sized> Brush<C> {
         )
         .piet_err()?;
 
-        let mut bounds = Rect::from_points(gradient.start, gradient.end);
+        let (gradient, transform) = straighten_gradient(gradient);
+        let bounds = Rect::from_points(gradient.start, gradient.end);
         let offset = -bounds.origin().to_vec2();
-
-        if approx_eq(bounds.width(), 0.0) {
-            bounds.x1 += 1.0;
-        }
-
-        if approx_eq(bounds.height(), 0.0) {
-            bounds.y1 += 1.0;
-        }
-
         texture.write_linear_gradient(context, device, queue, &gradient, bounds.size(), offset)?;
-        Ok(Self::textured(texture, bounds))
+        Ok(Self::textured(texture, bounds.size(), transform))
     }
 
     /// Create a new brush from a radial gradient.
@@ -117,20 +109,18 @@ impl<C: GpuContext + ?Sized> Brush<C> {
 
         let bounds = Circle::new(gradient.center, gradient.radius).bounding_box();
         let offset = -bounds.origin().to_vec2();
+        let transform = scale_and_offset(bounds.size(), bounds.origin());
 
         texture.write_radial_gradient(context, device, queue, &gradient, bounds.size(), offset)?;
-        Ok(Self::textured(texture, bounds))
+        Ok(Self::textured(texture, bounds.size(), transform))
     }
 
     /// Create a new brush from a texture.
-    fn textured(texture: Texture<C>, bounds: Rect) -> Self {
+    fn textured(texture: Texture<C>, size: kurbo::Size, transform: Affine) -> Self {
         // Create a new image.
-        let image = Image::new(texture, bounds.size());
+        let image = Image::new(texture, size);
 
-        Self(BrushInner::Texture {
-            image,
-            offset: bounds.origin(),
-        })
+        Self(BrushInner::Texture { image, transform })
     }
 
     /// Get the texture associated with this brush.
@@ -153,13 +143,8 @@ impl<C: GpuContext + ?Sized> Brush<C> {
                 },
             },
 
-            BrushInner::Texture { ref image, offset } => {
-                // Create a transform to convert from image coordinates to
-                // UV coordinates.
-                let uv_transform =
-                    Affine::scale_non_uniform(1.0 / image.size().width, 1.0 / image.size().height)
-                        * Affine::translate(-offset.to_vec2());
-                let uv = uv_transform * Point::new(point[0] as f64, point[1] as f64);
+            BrushInner::Texture { transform, .. } => {
+                let uv = transform * Point::new(point[0] as f64, point[1] as f64);
                 Vertex {
                     pos: point,
                     uv: [uv.x as f32, uv.y as f32],
@@ -174,14 +159,60 @@ impl<C: GpuContext + ?Sized> Clone for BrushInner<C> {
     fn clone(&self) -> Self {
         match self {
             Self::Solid(color) => Self::Solid(*color),
-            Self::Texture { image, offset } => Self::Texture {
+            Self::Texture { image, transform } => Self::Texture {
                 image: image.clone(),
-                offset: *offset,
+                transform: *transform,
             },
         }
     }
 }
 
-fn approx_eq(a: f64, b: f64) -> bool {
-    (a - b).abs() < 1e-6
+/// Convert a gradient into either a horizontal or vertical gradient as well as
+/// a rotation that rotates the start/end points to their former positions.
+fn straighten_gradient(gradient: FixedLinearGradient) -> (FixedLinearGradient, Affine) {
+    // If the gradient is already almost straight, then no need to do anything.
+    if (gradient.start.x - gradient.end.x).abs() < 1.0
+        || (gradient.start.y - gradient.end.y).abs() < 1.0
+    {
+        let mut bounds = Rect::from_points(gradient.start, gradient.end);
+        if (bounds.width() as isize) < 0 {
+            bounds.x1 += 1.0;
+        }
+        if (bounds.height() as isize) < 0 {
+            bounds.y1 += 1.0;
+        }
+
+        return (gradient, scale_and_offset(bounds.size(), bounds.origin()));
+    }
+
+    // Get the angle and length between the start and end points.
+    let (angle, length) = {
+        let delta = gradient.end - gradient.start;
+        (delta.angle(), delta.hypot())
+    };
+
+    // Create a horizontal line starting at the start point with the same length
+    // as the original gradient.
+    let horizontal_end = gradient.start + kurbo::Vec2::new(length, 0.0);
+
+    // Use that to create a new gradient.
+    let new_gradient = FixedLinearGradient {
+        start: gradient.start,
+        end: horizontal_end,
+        stops: gradient.stops,
+    };
+
+    // A transform that maps UV coordinates into this plane.
+    let offset = gradient.start.to_vec2();
+    let new_bounds = Rect::from_points(new_gradient.start, new_gradient.end);
+    let transform = scale_and_offset(new_bounds.size(), new_bounds.origin())
+        * Affine::translate(offset)
+        * Affine::rotate(-angle)
+        * Affine::translate(-offset);
+    (new_gradient, transform)
+}
+
+fn scale_and_offset(size: kurbo::Size, offset: kurbo::Point) -> Affine {
+    Affine::scale_non_uniform(1.0 / size.width, 1.0 / size.height)
+        * Affine::translate(-offset.to_vec2())
 }
