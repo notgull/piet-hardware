@@ -42,21 +42,9 @@ fn unpack_color(color: u32) -> vec4<f32> {
 
 @vertex
 fn vertex_main(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) vec4<f32> {
-    if (in_vertex_index == 0u) {
-        return VERTS[0];
-    } else if (in_vertex_index == 1u) {
-        return VERTS[1];
-    } else if (in_vertex_index == 2u) {
-        return VERTS[2];
-    } else if (in_vertex_index == 3u) {
-        return VERTS[3];
-    } else if (in_vertex_index == 4u) {
-        return VERTS[4];
-    } else if (in_vertex_index == 5u) {
-        return VERTS[5];
-    } else {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
+    var verts: array<vec4<f32>, 6> = VERTS;
+    return verts[in_vertex_index];
+
 }
 
 @fragment
