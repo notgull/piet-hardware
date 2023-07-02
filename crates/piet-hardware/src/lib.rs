@@ -66,6 +66,7 @@ mod image;
 mod mask;
 mod rasterizer;
 mod resources;
+mod stroke;
 mod text;
 
 pub use self::brush::Brush;
