@@ -537,9 +537,14 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
                             fs,
                         )
                     }) {
-                        Ok(rect) => rect,
-                        Err(e) => {
+                        Some(Ok(rect)) => rect,
+                        Some(Err(e)) => {
                             tracing::trace!("failed to get uv rect: {}", e);
+                            return None;
+                        }
+                        None => {
+                            // Still waiting to load.
+                            tracing::trace!("font system not loaded yet");
                             return None;
                         }
                     };

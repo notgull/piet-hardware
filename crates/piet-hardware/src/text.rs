@@ -40,7 +40,7 @@ impl Text {
     pub(crate) fn with_font_system_mut<R>(
         &self,
         f: impl FnOnce(&mut cosmic_text::FontSystem) -> R,
-    ) -> R {
+    ) -> Option<R> {
         self.0.with_font_system_mut(f)
     }
 }
