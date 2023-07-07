@@ -23,10 +23,13 @@
 //!
 //! [`glow`]: https://crates.io/crates/glow
 
+pub use glow;
+pub use piet_hardware::piet;
+
 use glow::HasContext;
 
 use piet::IntoBrush;
-use piet_hardware::piet::{self, kurbo, Error as Pierror};
+use piet_hardware::piet::{kurbo, Error as Pierror};
 
 use std::borrow::Cow;
 use std::cell::Cell;

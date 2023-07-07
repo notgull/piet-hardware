@@ -41,8 +41,11 @@
 
 #![forbid(unsafe_code, rust_2018_idioms)]
 
+pub use piet_hardware::piet;
+pub use wgpu;
+
 use piet_hardware::piet::kurbo::Affine;
-use piet_hardware::piet::{self, Color, Error as Pierror, ImageFormat, InterpolationMode};
+use piet_hardware::piet::{Color, Error as Pierror, ImageFormat, InterpolationMode};
 
 mod buffer;
 mod context;
