@@ -205,6 +205,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         // Create a piet-glow render context.
                         let mut rc = unsafe { context.render_context(scaled_width, scaled_height) };
+                        piet::RenderContext::text(&mut rc).set_dpi(72.0);
                         piet::RenderContext::transform(&mut rc, piet::kurbo::Affine::scale(scale));
 
                         // Draw with the context.

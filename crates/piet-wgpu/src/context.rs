@@ -43,6 +43,7 @@ const CLEAR_SHADER_SOURCE: &str = include_str!("shaders/clear.wgsl");
 const GEOM_SHADER_SOURCE: &str = include_str!("shaders/geom.wgsl");
 
 /// Common state between drawing operations.
+#[derive(Debug)]
 pub(crate) struct GpuContext {
     /// The rendering pipeline for geometry.
     geometry_pipeline: wgpu::RenderPipeline,
@@ -76,6 +77,7 @@ pub(crate) struct GpuContext {
 }
 
 /// An operation that can be performed by the context.
+#[derive(Debug)]
 pub(crate) enum DrawOp {
     /// Clear the screen with the provided color.
     Clear(Rc<wgpu::BindGroup>),
@@ -155,6 +157,7 @@ impl DrawOp {
 }
 
 /// Represents a pushed buffer call.
+#[derive(Debug)]
 pub(crate) struct PushedBuffer {
     /// The buffers that were pushed to the screen.
     buffers: WgpuVertexBuffer,

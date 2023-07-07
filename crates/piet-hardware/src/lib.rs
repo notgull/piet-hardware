@@ -43,16 +43,14 @@
 
 #![forbid(unsafe_code, rust_2018_idioms)]
 
-use cosmic_text::LayoutGlyph;
-use line_straddler::{LineGenerator, LineType};
+pub use piet;
 
 use lyon_tessellation::FillRule;
 
-pub use piet;
 use piet::kurbo::{Affine, PathEl, Point, Rect, Shape, Size};
 use piet::{Error as Pierror, FixedGradient, Image as _, InterpolationMode};
 
-use piet_cosmic_text::Metadata;
+use piet_cosmic_text::LineProcessor;
 use tinyvec::TinyVec;
 
 use std::error::Error as StdError;
@@ -201,6 +199,7 @@ impl<C: GpuContext + ?Sized> Source<C> {
 }
 
 /// The whole point of this crate.
+#[derive(Debug)]
 pub struct RenderContext<'src, 'dev, 'que, C: GpuContext + ?Sized> {
     /// The source of the GPU renderer.
     source: &'src mut Source<C>,
@@ -224,6 +223,7 @@ pub struct RenderContext<'src, 'dev, 'que, C: GpuContext + ?Sized> {
     tolerance: f64,
 }
 
+#[derive(Debug)]
 struct RenderState<C: GpuContext + ?Sized> {
     /// The current transform in pixel space.
     transform: Affine,
@@ -510,7 +510,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
         let text = restore.context.text().clone();
         let device = restore.context.device;
         let queue = restore.context.queue;
-        let mut line_state = TextProcessingState::new();
+        let mut line_state = LineProcessor::new();
         let rects = layout
             .buffer()
             .layout_runs()
@@ -549,35 +549,37 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
                         }
                     };
 
+                    let physical = glyph.physical((0.0, 0.0), 1.0);
+
                     // Get the rectangle in screen space representing the glyph.
                     let pos_rect = Rect::from_origin_size(
                         (
-                            glyph.x_int as f64 + pos.x + offset.x,
-                            glyph.y_int as f64 + line_y + pos.y - offset.y,
+                            physical.x as f64 + pos.x + offset.x,
+                            physical.y as f64 + line_y + pos.y - offset.y,
                         ),
                         size,
                     );
 
-                    let color = match glyph.color_opt {
-                        Some(color) => {
-                            let [r, g, b, a] = [color.r(), color.g(), color.b(), color.a()];
-                            piet::Color::rgba8(r, g, b, a)
-                        }
-                        None => piet::util::DEFAULT_TEXT_COLOR,
-                    };
+                    let color = glyph.color_opt.unwrap_or({
+                        let piet_color = piet::util::DEFAULT_TEXT_COLOR;
+                        let (r, g, b, a) = piet_color.as_rgba8();
+                        cosmic_text::Color::rgba(r, g, b, a)
+                    });
+                    let piet_color =
+                        glyph
+                            .color_opt
+                            .map_or(piet::util::DEFAULT_TEXT_COLOR, |color| {
+                                let [r, g, b, a] = [color.r(), color.g(), color.b(), color.a()];
+                                piet::Color::rgba8(r, g, b, a)
+                            });
 
                     // Register the glyph in the atlas.
-                    line_state.handle_glyph(
-                        glyph,
-                        line_y as f32 - (f32::from_bits(glyph.cache_key.font_size_bits) * 0.9),
-                        color,
-                        false,
-                    );
+                    line_state.handle_glyph(glyph, line_y as f32, color);
 
                     Some(TessRect {
                         pos: pos_rect,
                         uv: uv_rect,
-                        color,
+                        color: piet_color,
                     })
                 }
             })
@@ -593,31 +595,15 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
             } else {
                 self.fill_rects(
                     lines.into_iter().map(|line| {
-                        let line_straddler::Line {
-                            y,
-                            start_x,
-                            end_x,
-                            style,
-                            ..
-                        } = line;
-                        let line_width = 3.0;
-
+                        let mut rect = line.into_rect();
+                        rect.x0 += pos.x;
+                        rect.y0 += pos.y;
+                        rect.x1 += pos.x;
+                        rect.y1 += pos.y;
                         TessRect {
-                            pos: Rect::from_points(
-                                Point::new(start_x as f64, y as f64) + pos.to_vec2(),
-                                Point::new(end_x as f64, y as f64 + line_width) + pos.to_vec2(),
-                            ),
+                            pos: rect,
                             uv: Rect::new(0.5, 0.5, 0.5, 0.5),
-                            color: {
-                                let [r, g, b, a] = [
-                                    style.color.red(),
-                                    style.color.green(),
-                                    style.color.blue(),
-                                    style.color.alpha(),
-                                ];
-
-                                piet::Color::rgba8(r, g, b, a)
-                            },
+                            color: line.color,
                         }
                     }),
                     None,
@@ -780,88 +766,6 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
 
     fn current_transform(&self) -> Affine {
         self.state.last().unwrap().transform
-    }
-}
-
-struct TextProcessingState {
-    /// State for the underline.
-    underline: LineGenerator,
-
-    /// State for the strikethrough.
-    strikethrough: LineGenerator,
-
-    /// The lines to draw.
-    lines: Vec<line_straddler::Line>,
-}
-
-impl TextProcessingState {
-    fn new() -> Self {
-        Self {
-            underline: LineGenerator::new(LineType::Underline),
-            strikethrough: LineGenerator::new(LineType::StrikeThrough),
-            lines: Vec::new(),
-        }
-    }
-
-    fn handle_glyph(
-        &mut self,
-        glyph: &LayoutGlyph,
-        line_y: f32,
-        color: piet::Color,
-        is_bold: bool,
-    ) {
-        // Get the metadata.
-        let metadata = Metadata::from_raw(glyph.metadata);
-        let glyph = line_straddler::Glyph {
-            line_y,
-            font_size: f32::from_bits(glyph.cache_key.font_size_bits),
-            width: glyph.w,
-            x: glyph.x,
-            style: line_straddler::GlyphStyle {
-                bold: is_bold,
-                color: match glyph.color_opt {
-                    Some(color) => {
-                        let [r, g, b, a] = [color.r(), color.g(), color.b(), color.a()];
-
-                        line_straddler::Color::rgba(r, g, b, a)
-                    }
-
-                    None => {
-                        let (r, g, b, a) = color.as_rgba8();
-                        line_straddler::Color::rgba(r, g, b, a)
-                    }
-                },
-            },
-        };
-        let Self {
-            underline,
-            strikethrough,
-            lines,
-        } = self;
-
-        let handle_meta = |generator: &mut LineGenerator, has_it| {
-            if has_it {
-                generator.add_glyph(glyph)
-            } else {
-                generator.pop_line()
-            }
-        };
-
-        let underline = handle_meta(underline, metadata.underline());
-        let strikethrough = handle_meta(strikethrough, metadata.strikethrough());
-
-        lines.extend(underline);
-        lines.extend(strikethrough);
-    }
-
-    fn lines(&mut self) -> Vec<line_straddler::Line> {
-        // Pop the last lines.
-        let underline = self.underline.pop_line();
-        let strikethrough = self.strikethrough.pop_line();
-        self.lines.extend(underline);
-        self.lines.extend(strikethrough);
-
-        mem::take(&mut self.lines)
     }
 }
 

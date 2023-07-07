@@ -91,6 +91,14 @@ struct GpuContext<H: HasContext + ?Sized> {
     context: Rc<H>,
 }
 
+impl<H: HasContext + ?Sized> fmt::Debug for GpuContext<H> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GpuContext")
+            .field("robust", &!self.check_indices)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<H: HasContext + ?Sized> GpuContext<H> {
     fn uniform(&self, uniform: Uniforms) -> &H::UniformLocation {
         self.uniforms.get(uniform.as_index()).unwrap()
@@ -685,6 +693,7 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
 }
 
 /// A wrapper around a [`glow`] context with cached information.
+#[derive(Debug)]
 pub struct GlContext<H: HasContext + ?Sized> {
     text: Text,
     source: piet_hardware::Source<GpuContext<H>>,
@@ -929,6 +938,7 @@ impl<H: HasContext + ?Sized> piet::RenderContext for RenderContext<'_, H> {
 }
 
 /// The brush type.
+#[derive(Debug)]
 pub struct Brush<H: HasContext + ?Sized>(piet_hardware::Brush<GpuContext<H>>);
 
 impl<H: HasContext + ?Sized> Clone for Brush<H> {
@@ -948,6 +958,7 @@ impl<H: HasContext + ?Sized> IntoBrush<RenderContext<'_, H>> for Brush<H> {
 }
 
 /// The image type.
+#[derive(Debug)]
 pub struct Image<H: HasContext + ?Sized>(piet_hardware::Image<GpuContext<H>>);
 
 impl<H: HasContext + ?Sized> Clone for Image<H> {
@@ -963,7 +974,7 @@ impl<H: HasContext + ?Sized> piet::Image for Image<H> {
 }
 
 /// The text layout type.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TextLayout(piet_hardware::TextLayout);
 
 impl piet::TextLayout for TextLayout {
@@ -1005,6 +1016,7 @@ impl piet::TextLayout for TextLayout {
 }
 
 /// The text layout builder type.
+#[derive(Debug)]
 pub struct TextLayoutBuilder(piet_hardware::TextLayoutBuilder);
 
 impl piet::TextLayoutBuilder for TextLayoutBuilder {
@@ -1036,8 +1048,20 @@ impl piet::TextLayoutBuilder for TextLayoutBuilder {
 }
 
 /// The text engine type.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Text(piet_hardware::Text);
+
+impl Text {
+    /// Get the DPI scale.
+    pub fn dpi(&self) -> f64 {
+        self.0.dpi()
+    }
+
+    /// Set the DPI scale.
+    pub fn set_dpi(&mut self, dpi: f64) {
+        self.0.set_dpi(dpi)
+    }
+}
 
 impl piet::Text for Text {
     type TextLayoutBuilder = TextLayoutBuilder;
