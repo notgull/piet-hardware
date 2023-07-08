@@ -41,8 +41,11 @@
 
 #![forbid(unsafe_code, rust_2018_idioms)]
 
+pub use piet_hardware::piet;
+pub use wgpu;
+
 use piet_hardware::piet::kurbo::Affine;
-use piet_hardware::piet::{self, Color, Error as Pierror, ImageFormat, InterpolationMode};
+use piet_hardware::piet::{Color, Error as Pierror, ImageFormat, InterpolationMode};
 
 mod buffer;
 mod context;
@@ -51,6 +54,7 @@ mod texture;
 use context::GpuContext;
 
 /// A wrapper around internal cached state.
+#[derive(Debug)]
 pub struct WgpuContext {
     /// The internal context.
     source: piet_hardware::Source<GpuContext>,
@@ -101,6 +105,7 @@ impl WgpuContext {
 }
 
 /// The whole point.
+#[derive(Debug)]
 pub struct RenderContext<'context, 'device, 'queue> {
     context: piet_hardware::RenderContext<'context, 'device, 'queue, GpuContext>,
     text: &'context mut Text,
@@ -251,6 +256,7 @@ impl piet::RenderContext for RenderContext<'_, '_, '_> {
 }
 
 /// The brush type.
+#[derive(Debug)]
 pub struct Brush(piet_hardware::Brush<GpuContext>);
 
 impl Clone for Brush {
@@ -270,6 +276,7 @@ impl piet::IntoBrush<RenderContext<'_, '_, '_>> for Brush {
 }
 
 /// The image type.
+#[derive(Debug)]
 pub struct Image(piet_hardware::Image<GpuContext>);
 
 impl Clone for Image {
@@ -285,7 +292,7 @@ impl piet::Image for Image {
 }
 
 /// The text layout type.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TextLayout(piet_hardware::TextLayout);
 
 impl piet::TextLayout for TextLayout {
@@ -327,6 +334,7 @@ impl piet::TextLayout for TextLayout {
 }
 
 /// The text layout builder type.
+#[derive(Debug)]
 pub struct TextLayoutBuilder(piet_hardware::TextLayoutBuilder);
 
 impl piet::TextLayoutBuilder for TextLayoutBuilder {
@@ -358,8 +366,20 @@ impl piet::TextLayoutBuilder for TextLayoutBuilder {
 }
 
 /// The text engine type.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Text(piet_hardware::Text);
+
+impl Text {
+    /// Get the DPI scale.
+    pub fn dpi(&self) -> f64 {
+        self.0.dpi()
+    }
+
+    /// Set the DPI scale.
+    pub fn set_dpi(&mut self, dpi: f64) {
+        self.0.set_dpi(dpi)
+    }
+}
 
 impl piet::Text for Text {
     type TextLayoutBuilder = TextLayoutBuilder;

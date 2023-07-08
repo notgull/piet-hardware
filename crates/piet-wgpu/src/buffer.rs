@@ -37,7 +37,7 @@ use std::mem;
 use std::rc::Rc;
 
 /// The resource representing a WGPU buffer.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct WgpuVertexBuffer(Rc<VertexBufferInner>);
 
 // Comparisons occur by pointer.
@@ -55,6 +55,7 @@ impl Hash for WgpuVertexBuffer {
     }
 }
 
+#[derive(Debug)]
 struct VertexBufferInner {
     /// The vertex buffer.
     vertex_buffer: RefCell<Buffer>,
@@ -112,6 +113,7 @@ impl WgpuVertexBuffer {
 }
 
 /// Describes the data for a buffer.
+#[derive(Debug)]
 pub(crate) struct Buffer {
     /// The index of the inner WGPU buffer.
     id: usize,
@@ -151,6 +153,7 @@ pub(crate) struct Buffer {
 /// Either a single buffer or a list of them.
 ///
 /// This is used to dynamically reallocate new buffers during rendering.
+#[derive(Debug)]
 enum BufferCollection {
     /// A single buffer.
     Single(Rc<wgpu::Buffer>),

@@ -13,17 +13,16 @@ description = "Toolkit for creating GPU accelerated 2D graphics applications"
 
 [dependencies]
 ahash = { version = "0.8.3", default-features = false, features = ["std"] }
-arrayvec = "0.7.2"
-bytemuck = { version = "1.13.0", default-features = false, features = ["derive"] }
-cosmic-text = { version = "0.8.0", default-features = false, features = ["swash"] }
-etagere = "0.2.7"
-hashbrown = { version = "0.13.2", default-features = false }
+arrayvec = "0.7.4"
+bytemuck = { version = "1.13.1", default-features = false, features = ["derive"] }
+cosmic-text = { version = "0.9.0", default-features = false, features = ["swash"] }
+etagere = "0.2.8"
+hashbrown = { version = "0.14.0", default-features = false }
 kurbo = { version = "0.9.5", default-features = false }
-line-straddler = "0.1.0"
 lyon_tessellation = "1.0.10"
 piet = { version = "0.6.2", default-features = false }
-piet-cosmic-text = "0.2.0"
-tiny-skia = { version = "0.11.0", default-features = false, features = ["std"] }
+piet-cosmic-text = { version = "0.3.0", default-features = false, features = ["std", "tracing"] }
+tiny-skia = { version = "0.11.1", default-features = false, features = ["std"] }
 tinyvec = { version = "1.6.0", default-features = false, features = ["alloc"] }
 tracing = { version = "0.1.37", default-features = false }
 zeno = { version = "0.2.2", default-features = false }
@@ -31,10 +30,10 @@ zeno = { version = "0.2.2", default-features = false }
 [dev-dependencies]
 env_logger = { version = "0.10.0", default-features = false, features = ["auto-color"] }
 gl = "0.14.0"
-glutin = { version = "0.30.6", default-features = false, features = ["x11", "glx", "egl", "wgl"] }
+glutin = { version = "0.30.9", default-features = false, features = ["x11", "glx", "egl", "wayland", "wgl"] }
 glutin-winit = { version = "0.3.0", default-features = false, features = ["x11", "egl", "glx", "wgl"] }
-image = { version = "0.24.5", default-features = false, features = ["png"] }
-log = "0.4.17"
-raw-window-handle = { version = "0.5.0", default-features = false }
-winit = { version = "0.28.1", default-features = false, features = ["x11"] }
+image = { version = "0.24.6", default-features = false, features = ["png"] }
+log = "0.4.19"
+raw-window-handle = { version = "0.5.2", default-features = false }
+winit = { version = "0.28.6", default-features = false, features = ["wayland", "x11"] }
 

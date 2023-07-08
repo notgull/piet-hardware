@@ -28,7 +28,7 @@ use super::{shape_to_skia_path, ResultExt};
 use piet::kurbo::{Affine, Shape};
 use piet::{Error as Pierror, InterpolationMode};
 
-use std::mem;
+use std::{fmt, mem};
 
 use tiny_skia::{FillRule, Mask as ClipMask, PathBuilder, Pixmap};
 
@@ -46,6 +46,22 @@ impl<C: GpuContext + ?Sized> Default for MaskSlot<C> {
         Self {
             slot: MaskSlotState::Empty(None),
             path_builder: PathBuilder::new(),
+        }
+    }
+}
+
+impl<C: GpuContext + ?Sized> fmt::Debug for MaskSlot<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct Ellipses;
+        impl fmt::Debug for Ellipses {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("...")
+            }
+        }
+
+        match self.slot {
+            MaskSlotState::Empty(_) => f.debug_struct("MaskSlot").finish_non_exhaustive(),
+            MaskSlotState::Mask(_) => f.debug_struct("MaskSlot").field("mask", &Ellipses).finish(),
         }
     }
 }

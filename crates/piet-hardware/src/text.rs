@@ -27,7 +27,7 @@ use piet_cosmic_text::{
 };
 
 /// The text layout engine for the GPU renderer.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Text(CosText);
 
 impl Text {
@@ -40,8 +40,18 @@ impl Text {
     pub(crate) fn with_font_system_mut<R>(
         &self,
         f: impl FnOnce(&mut cosmic_text::FontSystem) -> R,
-    ) -> R {
+    ) -> Option<R> {
         self.0.with_font_system_mut(f)
+    }
+
+    /// Set the DPI for rendering text.
+    pub fn set_dpi(&mut self, dpi: f64) {
+        self.0.set_dpi(dpi);
+    }
+
+    /// Get the current DPI for rendering text.
+    pub fn dpi(&self) -> f64 {
+        self.0.dpi()
     }
 }
 
@@ -63,6 +73,7 @@ impl piet::Text for Text {
 }
 
 /// The text layout builder for the GPU renderer.
+#[derive(Debug)]
 pub struct TextLayoutBuilder(CosTextLayoutBuilder);
 
 impl piet::TextLayoutBuilder for TextLayoutBuilder {
@@ -94,7 +105,7 @@ impl piet::TextLayoutBuilder for TextLayoutBuilder {
 }
 
 /// The text layout for the GPU renderer.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TextLayout(CosTextLayout);
 
 impl TextLayout {

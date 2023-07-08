@@ -32,6 +32,7 @@ use piet::{Error as Pierror, FixedLinearGradient, FixedRadialGradient};
 use std::borrow::Cow;
 
 /// The brush type used by the GPU renderer.
+#[derive(Debug)]
 pub struct Brush<C: GpuContext + ?Sized>(BrushInner<C>);
 
 impl<C: GpuContext + ?Sized> Clone for Brush<C> {
@@ -40,6 +41,7 @@ impl<C: GpuContext + ?Sized> Clone for Brush<C> {
     }
 }
 
+#[derive(Debug)]
 enum BrushInner<C: GpuContext + ?Sized> {
     /// A solid color.
     Solid(piet::Color),

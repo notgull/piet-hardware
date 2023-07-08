@@ -29,6 +29,7 @@ use piet::kurbo::Size;
 use std::rc::Rc;
 
 /// The image type used by the GPU renderer.
+#[derive(Debug)]
 pub struct Image<C: GpuContext + ?Sized> {
     /// The texture.
     texture: Rc<Texture<C>>,

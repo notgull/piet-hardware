@@ -670,6 +670,7 @@ impl piet_hardware::GpuContext for GlContext {
 
             let (internal_format, format, ty) = match format {
                 piet::ImageFormat::RgbaSeparate => (gl::RGBA8, gl::RGBA, gl::UNSIGNED_BYTE),
+                piet::ImageFormat::RgbaPremul => (gl::RGBA8, gl::RGBA, gl::UNSIGNED_BYTE),
                 _ => panic!("unsupported image format"),
             };
 

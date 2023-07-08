@@ -23,6 +23,8 @@
 
 use super::gpu_backend::{GpuContext, RepeatStrategy, Vertex};
 
+use std::fmt;
+
 use piet::kurbo::{Size, Vec2};
 use piet::{
     Error as Pierror, FixedLinearGradient, FixedRadialGradient, GradientStop, InterpolationMode,
@@ -34,6 +36,13 @@ macro_rules! define_resource_wrappers {
         $(
             pub(crate) struct $name<C: GpuContext + ?Sized> {
                 resource: C::$res,
+            }
+
+            impl<C: GpuContext + ?Sized> fmt::Debug for $name<C> {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.debug_struct(stringify!($name))
+                        .finish_non_exhaustive()
+                }
             }
 
             impl<C: GpuContext + ?Sized> $name<C> {

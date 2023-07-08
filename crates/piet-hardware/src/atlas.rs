@@ -150,7 +150,9 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
             }
         };
 
-        let key = glyph.cache_key;
+        // TODO: Scaling.
+        let physical = glyph.physical((0.0, 0.0), 1.0);
+        let key = physical.cache_key;
 
         match self.glyphs.entry(key) {
             Entry::Occupied(o) => {
@@ -162,10 +164,10 @@ impl<C: GpuContext + ?Sized> Atlas<C> {
                 // Get the swash image.
                 let sw_image = self
                     .swash_cache
-                    .get_image_uncached(font_system, glyph.cache_key)
+                    .get_image_uncached(font_system, key)
                     .ok_or_else(|| {
                         Pierror::BackendError({
-                            format!("Failed to outline glyph {}", glyph.cache_key.glyph_id).into()
+                            format!("Failed to outline glyph {}", glyph.glyph_id).into()
                         })
                     })?;
 

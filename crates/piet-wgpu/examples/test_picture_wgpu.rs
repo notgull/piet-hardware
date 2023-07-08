@@ -140,6 +140,7 @@ async fn entry() -> ! {
 
                 // Create the render context.
                 let mut rc = context.prepare(device, queue, dims.width as u32, dims.height as u32);
+                piet::RenderContext::text(&mut rc).set_dpi(72.0);
                 piet::RenderContext::transform(&mut rc, piet::kurbo::Affine::scale(scale));
 
                 // Draw the picture.
