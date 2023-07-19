@@ -15,7 +15,8 @@
 // You should have received a copy of the GNU Lesser General Public License and the Mozilla
 // Public License along with `piet-glow`. If not, see <https://www.gnu.org/licenses/>.
 
-//! The `piet-glow` basics.rs example, but with piet-wgpu.
+//! Sample 05 from piet.
+//! Source: https://github.com/linebender/piet/blob/24acaf6467bff134b7b5c7c0ec70973544020b49/piet/src/samples/picture_5.rs
 
 #[path = "util/setup_context.rs"]
 mod util;

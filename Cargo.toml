@@ -7,3 +7,6 @@ members = [
 ]
 
 resolver = "2"
+
+[patch.crates-io]
+piet-cosmic-text = { path = "../piet-cosmic-text" }
