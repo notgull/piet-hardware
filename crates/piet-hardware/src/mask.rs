@@ -23,219 +23,264 @@
 
 use super::gpu_backend::{GpuContext, RepeatStrategy};
 use super::resources::Texture;
-use super::{shape_to_skia_path, ResultExt};
+use super::shape_to_skia_path;
 
-use piet::kurbo::{Affine, Shape};
-use piet::{Error as Pierror, InterpolationMode};
+use piet::kurbo::Shape;
+use piet::InterpolationMode;
 
 use std::{fmt, mem};
 
-use tiny_skia::{FillRule, Mask as ClipMask, PathBuilder, Pixmap};
+use tiny_skia as ts;
+use ts::{FillRule, Mask as ClipMask, PathBuilder, PixmapMut};
 
-/// A wrapper around an `Option<Mask>` that supports being easily drawn into.
-pub(crate) struct MaskSlot<C: GpuContext + ?Sized> {
-    /// The slot containing the mask.
-    slot: MaskSlotState<C>,
+/// The context for creating and modifying masks.
+pub(crate) struct MaskContext<C: GpuContext + ?Sized> {
+    /// A scratch buffer for rendering masks into.
+    mask_render_buffer: Vec<u32>,
 
-    /// A cached path builder for drawing into the mask.
+    /// List of GPU textures to re-use.
+    gpu_textures: Vec<Texture<C>>,
+
+    /// Cached path builder for drawing into the mask.
     path_builder: PathBuilder,
 }
 
-impl<C: GpuContext + ?Sized> Default for MaskSlot<C> {
-    fn default() -> Self {
+/// A mask that can be clipped into.
+pub(crate) struct Mask<C: GpuContext + ?Sized> {
+    /// The underlying tiny-skia mask.
+    mask: ClipMask,
+
+    /// The current state of the mask.
+    state: MaskState<C>,
+}
+
+enum MaskState<C: GpuContext + ?Sized> {
+    /// The mask is empty.
+    Empty,
+
+    /// The mask has data and the texture has not been created yet.
+    DirtyWithNoTexture,
+
+    /// The mask has data but the texture is out of date.
+    DirtyWithTexture(Texture<C>),
+
+    /// The mask has data and the texture is up to date.
+    Clean(Texture<C>),
+}
+
+impl<C: GpuContext + ?Sized> MaskState<C> {
+    /// Move into the dirty state.
+    fn dirty(&mut self) {
+        let new = match mem::replace(self, Self::Empty) {
+            Self::Empty => Self::DirtyWithNoTexture,
+            Self::Clean(tex) => Self::DirtyWithTexture(tex),
+            rem => rem,
+        };
+
+        *self = new;
+    }
+
+    /// Is this mask dirty?
+    fn is_dirty(&self) -> bool {
+        matches!(self, Self::DirtyWithNoTexture | Self::DirtyWithTexture(_))
+    }
+
+    /// Get a reference to the texture, if there is one.
+    fn texture(&self) -> Option<&Texture<C>> {
+        match self {
+            Self::Clean(tex) | Self::DirtyWithTexture(tex) => Some(tex),
+            _ => None,
+        }
+    }
+
+    /// Take the texture out.
+    fn take_texture(&mut self) -> Option<Texture<C>> {
+        let (new, tex) = match mem::replace(self, Self::Empty) {
+            Self::Clean(tex) => (Self::DirtyWithNoTexture, Some(tex)),
+            Self::DirtyWithTexture(tex) => (Self::DirtyWithNoTexture, Some(tex)),
+            rem => (rem, None),
+        };
+
+        *self = new;
+        tex
+    }
+
+    /// Tell whether this is `Empty`.
+    fn is_empty(&self) -> bool {
+        matches!(self, Self::Empty)
+    }
+}
+
+impl<C: GpuContext + ?Sized> MaskContext<C> {
+    /// Create a new, empty mask context.
+    pub(crate) fn new() -> Self {
         Self {
-            slot: MaskSlotState::Empty(None),
+            mask_render_buffer: Vec::new(),
+            gpu_textures: Vec::new(),
             path_builder: PathBuilder::new(),
         }
     }
-}
 
-impl<C: GpuContext + ?Sized> fmt::Debug for MaskSlot<C> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        struct Ellipses;
-        impl fmt::Debug for Ellipses {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("...")
-            }
-        }
-
-        match self.slot {
-            MaskSlotState::Empty(_) => f.debug_struct("MaskSlot").finish_non_exhaustive(),
-            MaskSlotState::Mask(_) => f.debug_struct("MaskSlot").field("mask", &Ellipses).finish(),
-        }
-    }
-}
-
-enum MaskSlotState<C: GpuContext + ?Sized> {
-    /// The mask slot is empty.
-    ///
-    /// We keep the texture around so that we can reuse it.
-    Empty(Option<Texture<C>>),
-
-    /// The mask slot is being drawn into.
-    Mask(Mask<C>),
-}
-
-impl<C: GpuContext + ?Sized> MaskSlot<C> {
-    /// Create a new mask slot.
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
-    /// Is this mask empty?
-    pub(crate) fn is_empty(&self) -> bool {
-        match &self.slot {
-            MaskSlotState::Empty(_) => true,
-            MaskSlotState::Mask(_) => false,
-        }
-    }
-
-    /// Draw a shape into the mask.
-    pub(crate) fn clip(
-        &mut self,
-        context: &mut C,
-        device: &C::Device,
-        shape: impl Shape,
-        tolerance: f64,
-        transform: Affine,
-        (width, height): (u32, u32),
-    ) -> Result<(), Pierror> {
+    /// Add a new path to a mask.
+    pub(crate) fn add_path(&mut self, mask: &mut Mask<C>, shape: impl Shape, tolerance: f64) {
+        // Convert the shape to a tiny-skia path.
         let path = {
             let mut builder = mem::take(&mut self.path_builder);
             shape_to_skia_path(&mut builder, shape, tolerance);
             builder.finish().expect("path builder failed")
         };
 
-        match self.slot {
-            MaskSlotState::Mask(ref mut mask) => {
-                // Intersect the new path with the existing mask.
-                mask.mask.intersect_path(
-                    &path,
-                    FillRule::EvenOdd,
-                    false,
-                    tiny_skia::Transform::identity(),
-                );
-                mask.dirty = true;
-            }
-
-            MaskSlotState::Empty(ref mut texture) => {
-                // Create a mask if there isn't already one.
-                let texture = match texture.take() {
-                    Some(texture) => texture,
-                    None => Texture::new(
-                        context,
-                        device,
-                        InterpolationMode::Bilinear,
-                        RepeatStrategy::Color(piet::Color::TRANSPARENT),
-                    )
-                    .piet_err()?,
-                };
-
-                let mut mask = Mask {
-                    texture,
-                    pixmap: Pixmap::new(width, height).unwrap(),
-                    mask: ClipMask::new(width, height).unwrap(),
-                    dirty: true,
-                };
-
-                mask.mask
-                    .fill_path(&path, FillRule::EvenOdd, false, cvt_transform(transform));
-
-                self.slot = MaskSlotState::Mask(mask);
-            }
+        if mask.state.is_empty() {
+            // This is the first stroke, so fill the mask with the path.
+            mask.mask
+                .fill_path(&path, FillRule::EvenOdd, false, ts::Transform::identity());
+        } else {
+            // This is an intersection, so intersect the path with the mask.
+            mask.mask
+                .intersect_path(&path, FillRule::EvenOdd, false, ts::Transform::identity());
         }
 
-        self.path_builder = PathBuilder::new();
-        Ok(())
+        mask.state.dirty();
+        self.path_builder = path.clear();
     }
 
-    /// Get the texture for this mask.
-    pub(crate) fn texture(
+    /// Get the texture for a mask.
+    pub(crate) fn texture<'a>(
         &mut self,
+        mask: &'a mut Mask<C>,
         context: &mut C,
         device: &C::Device,
         queue: &C::Queue,
-    ) -> Result<Option<&Texture<C>>, Pierror> {
-        match self.slot {
-            MaskSlotState::Mask(ref mut mask) => mask.upload(context, device, queue).map(Some),
-
-            MaskSlotState::Empty(_) => Ok(None),
-        }
+    ) -> &'a Texture<C> {
+        self.upload_mask(mask, context, device, queue);
+        mask.state.texture().expect("mask texture")
     }
-}
 
-struct Mask<C: GpuContext + ?Sized> {
-    /// The texture that is used as the mask.
-    texture: Texture<C>,
+    /// Upload a mask into a texture.
+    fn upload_mask(
+        &mut self,
+        mask: &mut Mask<C>,
+        context: &mut C,
+        device: &C::Device,
+        queue: &C::Queue,
+    ) {
+        if mask.state.is_empty() {
+            unreachable!("uploading empty mask");
+        }
 
-    /// The pixmap we use as scratch space for drawing.
-    pixmap: tiny_skia::Pixmap,
+        if !mask.state.is_dirty() {
+            // No need to change anything.
+            return;
+        }
 
-    /// The clipping mask we use to calculate the mask.
-    mask: ClipMask,
+        // Create a pixmap to render into, using our scratch space.
+        // TODO: It would be nice to go right from the clip mask to the texture without using the
+        // pixmap as an intermediary.
+        let width = mask.mask.width();
+        let height = mask.mask.height();
+        self.mask_render_buffer
+            .resize(width as usize * height as usize, 0);
+        let mut pixmap = PixmapMut::from_bytes(
+            bytemuck::cast_slice_mut(&mut self.mask_render_buffer),
+            width,
+            height,
+        )
+        .expect("If the width/height is valid for the mask, it should work for the pixmap as well");
 
-    /// Whether the mask contains data that needs to be uploaded to the texture.
-    dirty: bool,
+        // Clear the pixmap with a black color.
+        pixmap.fill(ts::Color::TRANSPARENT);
+
+        // Render the mask into the pixmap.
+        pixmap.fill_rect(
+            ts::Rect::from_xywh(0., 0., width as f32, height as f32).expect("valid rect"),
+            &ts::Paint {
+                shader: ts::Shader::SolidColor(ts::Color::WHITE),
+                ..Default::default()
+            },
+            ts::Transform::identity(),
+            Some(&mask.mask),
+        );
+
+        // Either create a new GPU texture or re-use an older one.
+        let texture = mask
+            .state
+            .take_texture()
+            .or_else(|| self.gpu_textures.pop())
+            .unwrap_or_else(|| {
+                Texture::new(
+                    context,
+                    device,
+                    InterpolationMode::Bilinear,
+                    RepeatStrategy::Color(piet::Color::TRANSPARENT),
+                )
+                .expect("failed to create texture")
+            });
+
+        // Upload the pixmap to the texture.
+        texture.write_texture(
+            context,
+            device,
+            queue,
+            (width, height),
+            piet::ImageFormat::RgbaSeparate,
+            Some(pixmap.data_mut()),
+        );
+
+        // Put the texture back.
+        //
+        // This also marks the texture as non-dirty.
+        mask.state = MaskState::Clean(texture);
+    }
+
+    /// Reclaim the textures of a set of masks.
+    pub(crate) fn reclaim(&mut self, masks: impl Iterator<Item = Mask<C>>) {
+        // Take out all of the GPU textures.
+        self.gpu_textures
+            .extend(masks.flat_map(|mut mask| mask.state.take_texture()));
+    }
 }
 
 impl<C: GpuContext + ?Sized> Mask<C> {
-    /// Upload the mask to the texture.
-    fn upload(
-        &mut self,
-        context: &mut C,
-        device: &C::Device,
-        queue: &C::Queue,
-    ) -> Result<&Texture<C>, Pierror> {
-        if self.dirty {
-            // First, clear the pixmap.
-            self.pixmap.fill(tiny_skia::Color::from_rgba8(0, 0, 0, 0));
-
-            // Now, composite the mask onto the pixmap.
-            let paint = tiny_skia::Paint {
-                shader: tiny_skia::Shader::SolidColor(tiny_skia::Color::from_rgba8(
-                    0xFF, 0xFF, 0xFF, 0xFF,
-                )),
-                ..Default::default()
-            };
-            let rect = tiny_skia::Rect::from_xywh(
-                0.0,
-                0.0,
-                self.pixmap.width() as f32,
-                self.pixmap.height() as f32,
-            )
-            .unwrap();
-            self.pixmap.fill_rect(
-                rect,
-                &paint,
-                tiny_skia::Transform::identity(),
-                Some(&self.mask),
-            );
-
-            // Finally, upload the pixmap to the texture.
-            let data = self.pixmap.data();
-            self.texture.write_texture(
-                context,
-                device,
-                queue,
-                (self.pixmap.width(), self.pixmap.height()),
-                piet::ImageFormat::RgbaSeparate,
-                Some(data),
-            );
-
-            self.dirty = false;
+    /// Create a new mask with the given size.
+    pub(crate) fn new(width: u32, height: u32) -> Self {
+        Self {
+            mask: ClipMask::new(width, height).expect("failed to create mask"),
+            state: MaskState::Empty,
         }
-
-        Ok(&self.texture)
     }
 }
 
-fn cvt_transform(p: kurbo::Affine) -> tiny_skia::Transform {
-    tiny_skia::Transform::from_row(
-        p.as_coeffs()[0] as f32,
-        p.as_coeffs()[1] as f32,
-        p.as_coeffs()[2] as f32,
-        p.as_coeffs()[3] as f32,
-        p.as_coeffs()[4] as f32,
-        p.as_coeffs()[5] as f32,
-    )
+impl<C: GpuContext + ?Sized> Clone for Mask<C> {
+    /// Makes a new copy without the cached texture.
+    fn clone(&self) -> Self {
+        Self {
+            mask: self.mask.clone(),
+            state: if self.state.is_empty() {
+                MaskState::Empty
+            } else {
+                MaskState::DirtyWithNoTexture
+            },
+        }
+    }
+}
+
+impl<C: GpuContext + ?Sized> fmt::Debug for Mask<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Mask")
+            .field("width", &self.mask.width())
+            .field("height", &self.mask.height())
+            .field("state", &self.state)
+            .finish()
+    }
+}
+
+impl<C: GpuContext + ?Sized> fmt::Debug for MaskState<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => f.write_str("Empty"),
+            Self::DirtyWithNoTexture => f.write_str("DirtyWithNoTexture"),
+            Self::DirtyWithTexture(_) => f.write_str("DirtyWithTexture"),
+            Self::Clean(_) => f.write_str("Clean"),
+        }
+    }
 }

@@ -83,7 +83,7 @@ async fn entry() -> ! {
                 let samples = state.samples;
                 let format = state.format;
 
-                if number == 12 || number == 16 {
+                if number == 16 {
                     return Ok(());
                 }
 
@@ -141,10 +141,11 @@ async fn entry() -> ! {
                 // Create the render context.
                 let mut rc = context.prepare(device, queue, dims.width as u32, dims.height as u32);
                 piet::RenderContext::text(&mut rc).set_dpi(72.0);
-                piet::RenderContext::transform(&mut rc, piet::kurbo::Affine::scale(scale));
+                rc.set_bitmap_scale(scale);
 
                 // Draw the picture.
                 picture.draw(&mut rc)?;
+                drop(rc);
 
                 // Begin encoding commands.
                 let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

@@ -133,6 +133,7 @@ pub(super) fn run(
 
                         let mut piet = context.prepare(device, queue, window_size.0, window_size.1);
                         draw(&mut piet, window_size.0, window_size.1);
+                        drop(piet);
 
                         // Finish the render pass.
                         context.render(&mut render_pass);

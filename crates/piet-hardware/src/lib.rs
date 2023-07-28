@@ -73,7 +73,7 @@ pub use self::image::Image;
 pub use self::text::{Text, TextLayout, TextLayoutBuilder};
 
 pub(crate) use atlas::{Atlas, GlyphData};
-pub(crate) use mask::MaskSlot;
+pub(crate) use mask::{Mask, MaskContext};
 pub(crate) use rasterizer::{Rasterizer, TessRect};
 pub(crate) use resources::{Texture, VertexBuffer};
 
@@ -95,6 +95,14 @@ pub struct Source<C: GpuContext + ?Sized> {
 
     /// The font atlas.
     atlas: Option<Atlas<C>>,
+
+    /// The mask rendering context.
+    mask_context: MaskContext<C>,
+
+    /// The cached list of render states.
+    ///
+    /// This is always empty, but it keeps the memory around.
+    render_states: Option<TinyVec<[RenderState<C>; 1]>>,
 
     /// The context to use for the GPU renderer.
     context: C,
@@ -153,6 +161,8 @@ impl<C: GpuContext + ?Sized> Source<C> {
                 }
             },
             atlas: Some(Atlas::new(&mut context, device, queue)?),
+            mask_context: MaskContext::new(),
+            render_states: None,
             context,
             text: Text::new(),
         })
@@ -177,13 +187,20 @@ impl<C: GpuContext + ?Sized> Source<C> {
         height: u32,
     ) -> RenderContext<'this, 'dev, 'que, C> {
         RenderContext {
+            state: {
+                let mut list = self.render_states.take().unwrap_or_default();
+                list.clear();
+                list.push(RenderState::default());
+                list
+            },
             source: self,
             device,
             queue,
             size: (width, height),
-            state: TinyVec::from([RenderState::default()]),
             status: Ok(()),
             tolerance: 0.1,
+            ignore_state: false,
+            bitmap_scale: 1.0,
         }
     }
 
@@ -221,6 +238,12 @@ pub struct RenderContext<'src, 'dev, 'que, C: GpuContext + ?Sized> {
 
     /// Tolerance for tesselation.
     tolerance: f64,
+
+    /// Scale to apply for bitmaps.
+    bitmap_scale: f64,
+
+    /// Flag to ignore the current state.
+    ignore_state: bool,
 }
 
 #[derive(Debug)]
@@ -229,19 +252,46 @@ struct RenderState<C: GpuContext + ?Sized> {
     transform: Affine,
 
     /// The current clipping mask.
-    mask: MaskSlot<C>,
+    mask: Option<Mask<C>>,
 }
 
 impl<C: GpuContext + ?Sized> Default for RenderState<C> {
     fn default() -> Self {
         Self {
             transform: Affine::IDENTITY,
-            mask: MaskSlot::new(),
+            mask: None,
         }
     }
 }
 
-impl<C: GpuContext + ?Sized> RenderContext<'_, '_, '_, C> {
+impl<C: GpuContext + ?Sized> Drop for RenderContext<'_, '_, '_, C> {
+    fn drop(&mut self) {
+        match &mut self.state {
+            TinyVec::Heap(h) => self
+                .source
+                .mask_context
+                .reclaim(h.drain(..).filter_map(|s| s.mask)),
+            TinyVec::Inline(i) => self
+                .source
+                .mask_context
+                .reclaim(i.drain(..).filter_map(|s| s.mask)),
+        }
+
+        let mut state = mem::take(&mut self.state);
+        state.clear();
+        self.source.render_states = Some(state);
+    }
+}
+
+impl<'a, 'b, 'c, C: GpuContext + ?Sized> RenderContext<'a, 'b, 'c, C> {
+    /// Temporarily ignore the transform and the clip.
+    fn temporarily_ignore_state<'this>(
+        &'this mut self,
+    ) -> TemporarilyIgnoreState<'this, 'a, 'b, 'c, C> {
+        self.ignore_state = true;
+        TemporarilyIgnoreState(self)
+    }
+
     /// Fill in a rectangle.
     fn fill_rects(
         &mut self,
@@ -311,15 +361,25 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, '_, '_, C> {
         );
 
         // Decide which mask and transform to use.
-        let (transform, mask) = {
+        let (transform, mask) = if self.ignore_state {
+            (Affine::scale(self.bitmap_scale), &self.source.white_pixel)
+        } else {
             let state = self.state.last_mut().unwrap();
 
             let mask = state
                 .mask
-                .texture(&mut self.source.context, self.device, self.queue)?
+                .as_mut()
+                .map(|mask| {
+                    self.source.mask_context.texture(
+                        mask,
+                        &mut self.source.context,
+                        self.device,
+                        self.queue,
+                    )
+                })
                 .unwrap_or(&self.source.white_pixel);
 
-            (&state.transform, mask)
+            (Affine::scale(self.bitmap_scale) * state.transform, mask)
         };
 
         // Decide the texture to use.
@@ -334,7 +394,7 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, '_, '_, C> {
                 self.source.buffers.vbo.resource(),
                 texture.resource(),
                 mask.resource(),
-                transform,
+                &transform,
                 self.size,
             )
             .piet_err()?;
@@ -345,6 +405,20 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, '_, '_, C> {
         Ok(())
     }
 
+    fn clip_impl(&mut self, shape: impl Shape) {
+        let state = self.state.last_mut().unwrap();
+
+        // Transform the shape if we need to.
+
+        let mask = state
+            .mask
+            .get_or_insert_with(|| Mask::new(self.size.0, self.size.1));
+
+        self.source
+            .mask_context
+            .add_path(mask, shape, self.tolerance);
+    }
+
     /// Get the source of this render context.
     pub fn source(&self) -> &Source<C> {
         self.source
@@ -353,6 +427,30 @@ impl<C: GpuContext + ?Sized> RenderContext<'_, '_, '_, C> {
     /// Get a mutable reference to the source of this render context.
     pub fn source_mut(&mut self) -> &mut Source<C> {
         self.source
+    }
+
+    /// Get the current tolerance for tesselation.
+    ///
+    /// This is used to convert curves into line segments.
+    pub fn tolerance(&self) -> f64 {
+        self.tolerance
+    }
+
+    /// Set the current tolerance for tesselation.
+    ///
+    /// This is used to convert curves into line segments.
+    pub fn set_tolerance(&mut self, tolerance: f64) {
+        self.tolerance = tolerance;
+    }
+
+    /// Get the bitmap scale.
+    pub fn bitmap_scale(&self) -> f64 {
+        self.bitmap_scale
+    }
+
+    /// Set the bitmap scale.
+    pub fn set_bitmap_scale(&mut self, scale: f64) {
+        self.bitmap_scale = scale;
     }
 }
 
@@ -403,22 +501,44 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
         }
     }
 
-    fn clear(&mut self, region: impl Into<Option<Rect>>, color: piet::Color) {
+    fn clear(&mut self, region: impl Into<Option<Rect>>, mut color: piet::Color) {
         let region = region.into();
 
+        // Premultiply the color.
+        let clamp = |x: f64| {
+            if x < 0.0 {
+                0.0
+            } else if x > 1.0 {
+                1.0
+            } else {
+                x
+            }
+        };
+        let (r, g, b, a) = color.as_rgba();
+        let r = clamp(r * a);
+        let g = clamp(g * a);
+        let b = clamp(b * a);
+        color = piet::Color::rgba(r, g, b, 1.0);
+
         // Use optimized clear if possible.
-        if region.is_none() && self.state.last().unwrap().mask.is_empty() {
+        if region.is_none() {
             self.source.context.clear(self.device, self.queue, color);
             return;
         }
 
+        // Ignore clipping mask and transform.
+        let ignore_state = self.temporarily_ignore_state();
+
         // Otherwise, fall back to filling in the screen rectangle.
-        let result = self.fill_rects(
+        let result = ignore_state.0.fill_rects(
             {
                 let uv_white = Point::new(UV_WHITE[0] as f64, UV_WHITE[1] as f64);
                 [TessRect {
                     pos: region.unwrap_or_else(|| {
-                        Rect::from_origin_size((0.0, 0.0), (self.size.0 as f64, self.size.1 as f64))
+                        Rect::from_origin_size(
+                            (0.0, 0.0),
+                            (ignore_state.0.size.0 as f64, ignore_state.0.size.1 as f64),
+                        )
                     }),
                     uv: Rect::from_points(uv_white, uv_white),
                     color,
@@ -427,7 +547,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
             None,
         );
 
-        leap!(self, result);
+        leap!(ignore_state.0, result);
     }
 
     fn stroke(&mut self, shape: impl Shape, brush: &impl piet::IntoBrush<Self>, width: f64) {
@@ -467,19 +587,14 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
     }
 
     fn clip(&mut self, shape: impl Shape) {
-        let state = self.state.last_mut().unwrap();
-        let transform = state.transform;
-        leap!(
-            self,
-            state.mask.clip(
-                &mut self.source.context,
-                self.device,
-                shape,
-                self.tolerance,
-                transform,
-                self.size
-            )
-        );
+        // If we have a bitmap scale, scale the image up.
+        if (self.bitmap_scale - 1.0).abs() > 0.001 {
+            let mut path = shape.into_path(self.tolerance);
+            path.apply_affine(Affine::scale(self.bitmap_scale));
+            self.clip_impl(path);
+        } else {
+            self.clip_impl(shape);
+        }
     }
 
     fn text(&mut self) -> &mut Self::Text {
@@ -616,9 +731,10 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
     }
 
     fn save(&mut self) -> Result<(), Pierror> {
+        let last = self.state.last().unwrap();
         self.state.push(RenderState {
-            transform: self.state.last().unwrap().transform,
-            mask: MaskSlot::new(),
+            transform: last.transform,
+            mask: last.mask.clone(),
         });
         Ok(())
     }
@@ -628,7 +744,11 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
             return Err(Pierror::StackUnbalance);
         }
 
-        self.state.pop();
+        let mut state = self.state.pop().unwrap();
+        self.source
+            .mask_context
+            .reclaim(state.mask.take().into_iter());
+
         Ok(())
     }
 
@@ -766,6 +886,16 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
 
     fn current_transform(&self) -> Affine {
         self.state.last().unwrap().transform
+    }
+}
+
+struct TemporarilyIgnoreState<'this, 'a, 'b, 'c, C: GpuContext + ?Sized>(
+    &'this mut RenderContext<'a, 'b, 'c, C>,
+);
+
+impl<C: GpuContext + ?Sized> Drop for TemporarilyIgnoreState<'_, '_, '_, '_, C> {
+    fn drop(&mut self) {
+        self.0.ignore_state = false;
     }
 }
 

@@ -111,6 +111,32 @@ pub struct RenderContext<'context, 'device, 'queue> {
     text: &'context mut Text,
 }
 
+impl RenderContext<'_, '_, '_> {
+    /// Get the flattening tolerance.
+    #[inline]
+    pub fn tolerance(&self) -> f64 {
+        self.context.tolerance()
+    }
+
+    /// Set the flattening tolerance.
+    #[inline]
+    pub fn set_tolerance(&mut self, tolerance: f64) {
+        self.context.set_tolerance(tolerance)
+    }
+
+    /// Get the bitmap scale.
+    #[inline]
+    pub fn bitmap_scale(&self) -> f64 {
+        self.context.bitmap_scale()
+    }
+
+    /// Set the bitmap scale.
+    #[inline]
+    pub fn set_bitmap_scale(&mut self, scale: f64) {
+        self.context.set_bitmap_scale(scale)
+    }
+}
+
 impl piet::RenderContext for RenderContext<'_, '_, '_> {
     type Brush = Brush;
     type Image = Image;
