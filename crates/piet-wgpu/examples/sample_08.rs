@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .range_attribute(120..150, TextAttribute::TextColor(Color::rgb(0.6, 0., 0.)))
             .range_attribute(160..190, TextAttribute::TextColor(Color::rgb(0., 0.6, 0.)))
             .range_attribute(200..240, TextAttribute::TextColor(Color::rgb(0., 0., 0.6)))
-//            .range_attribute(200.., FontWeight::EXTRA_BLACK)
+            .range_attribute(200.., FontWeight::EXTRA_BLACK)
             .range_attribute(220.., TextAttribute::FontSize(18.0))
             .range_attribute(240.., FontStyle::Italic)
             .range_attribute(280.., TextAttribute::Underline(true))
