@@ -7,6 +7,3 @@ members = [
 ]
 
 resolver = "2"
-
-[patch.crates-io]
-piet-cosmic-text = { git = "https://github.com/notgull/piet-cosmic-text" }

@@ -2,21 +2,24 @@
 
 This log describes changes in the `piet-hardware`, `piet-glow` and `piet-wgpu` crates.
 
-## piet-glow UNRELEASED
+## piet-glow 0.1.4
 
 - Update to the newest `piet-hardware` version.
 
-## piet-wgpu UNRELEASED
+## piet-wgpu 0.3.0
 
 - **Breaking:** Adapt to the new middleware pattern.
+- **Breaking:** Upgrade `wgpu` to v0.17.
 - Update to the newest `piet-hardware` version.
 
-## piet-hardware UNRELEASED
+## piet-hardware 0.3.0
 
 - **Breaking:** Add the `capture_area` method for capturing an area of the screen.
 - **Breaking:** Change the `GpuContext` trait to use `&mut self` instead of `&self`.
 - Add support for dashed lines.
 - Fix some minor bugs.
+- Improved text handling.
+- Fix bugs in the clipping code.
 
 ## piet-wgpu 0.2.2
 
