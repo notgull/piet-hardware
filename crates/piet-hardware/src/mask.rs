@@ -33,16 +33,27 @@ use std::{fmt, mem};
 use tiny_skia as ts;
 use ts::{FillRule, Mask as ClipMask, PathBuilder, PixmapMut};
 
+// TODO: Adjust based on real-world data.
+const TOO_MANY_TEXTURES: usize = 1024;
+
 /// The context for creating and modifying masks.
 pub(crate) struct MaskContext<C: GpuContext + ?Sized> {
     /// A scratch buffer for rendering masks into.
     mask_render_buffer: Vec<u32>,
 
     /// List of GPU textures to re-use.
-    gpu_textures: Vec<Texture<C>>,
+    gpu_textures: Vec<SizedTexture<C>>,
+
+    /// The GPU textures currently in use.
+    used_textures: Vec<SizedTexture<C>>,
 
     /// Cached path builder for drawing into the mask.
     path_builder: PathBuilder,
+}
+
+struct SizedTexture<C: GpuContext + ?Sized> {
+    texture: Texture<C>,
+    size: (u32, u32),
 }
 
 /// A mask that can be clipped into.
@@ -62,10 +73,10 @@ enum MaskState<C: GpuContext + ?Sized> {
     DirtyWithNoTexture,
 
     /// The mask has data but the texture is out of date.
-    DirtyWithTexture(Texture<C>),
+    DirtyWithTexture(SizedTexture<C>),
 
     /// The mask has data and the texture is up to date.
-    Clean(Texture<C>),
+    Clean(SizedTexture<C>),
 }
 
 impl<C: GpuContext + ?Sized> MaskState<C> {
@@ -88,13 +99,13 @@ impl<C: GpuContext + ?Sized> MaskState<C> {
     /// Get a reference to the texture, if there is one.
     fn texture(&self) -> Option<&Texture<C>> {
         match self {
-            Self::Clean(tex) | Self::DirtyWithTexture(tex) => Some(tex),
+            Self::Clean(tex) | Self::DirtyWithTexture(tex) => Some(&tex.texture),
             _ => None,
         }
     }
 
     /// Take the texture out.
-    fn take_texture(&mut self) -> Option<Texture<C>> {
+    fn take_texture(&mut self) -> Option<SizedTexture<C>> {
         let (new, tex) = match mem::replace(self, Self::Empty) {
             Self::Clean(tex) => (Self::DirtyWithNoTexture, Some(tex)),
             Self::DirtyWithTexture(tex) => (Self::DirtyWithNoTexture, Some(tex)),
@@ -117,6 +128,7 @@ impl<C: GpuContext + ?Sized> MaskContext<C> {
         Self {
             mask_render_buffer: Vec::new(),
             gpu_textures: Vec::new(),
+            used_textures: Vec::new(),
             path_builder: PathBuilder::new(),
         }
     }
@@ -154,6 +166,21 @@ impl<C: GpuContext + ?Sized> MaskContext<C> {
     ) -> &'a Texture<C> {
         self.upload_mask(mask, context, device, queue);
         mask.state.texture().expect("mask texture")
+    }
+
+    /// Indicate that a texture has been used in this operation.
+    ///
+    /// This keeps us from re-using it by accident in the future.
+    pub(crate) fn mark_used(&mut self, mask: &mut Mask<C>) {
+        self.used_textures.extend(mask.state.take_texture())
+    }
+
+    /// Indicate that the GPU queue has been flushed.
+    pub(crate) fn gpu_flushed(&mut self) {
+        self.gpu_textures.append(&mut self.used_textures);
+
+        // If we have *a lot* of masks, get rid of some of them.
+        self.gpu_textures.truncate(TOO_MANY_TEXTURES);
     }
 
     /// Upload a mask into a texture.
@@ -205,19 +232,28 @@ impl<C: GpuContext + ?Sized> MaskContext<C> {
         let texture = mask
             .state
             .take_texture()
-            .or_else(|| self.gpu_textures.pop())
+            .or_else(|| {
+                // Look for a texture with the same size.
+                self.gpu_textures
+                    .iter()
+                    .rposition(|tex| tex.size == (width, height))
+                    .map(|idx| self.gpu_textures.swap_remove(idx))
+            })
             .unwrap_or_else(|| {
-                Texture::new(
+                let texture = Texture::new(
                     context,
                     device,
                     InterpolationMode::Bilinear,
                     RepeatStrategy::Color(piet::Color::TRANSPARENT),
                 )
-                .expect("failed to create texture")
+                .expect("failed to create texture");
+                let size = (width, height);
+
+                SizedTexture { texture, size }
             });
 
         // Upload the pixmap to the texture.
-        texture.write_texture(
+        texture.texture.write_texture(
             context,
             device,
             queue,
@@ -235,7 +271,7 @@ impl<C: GpuContext + ?Sized> MaskContext<C> {
     /// Reclaim the textures of a set of masks.
     pub(crate) fn reclaim(&mut self, masks: impl Iterator<Item = Mask<C>>) {
         // Take out all of the GPU textures.
-        self.gpu_textures
+        self.used_textures
             .extend(masks.flat_map(|mut mask| mask.state.take_texture()));
     }
 }

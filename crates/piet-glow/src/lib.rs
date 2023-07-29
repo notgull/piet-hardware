@@ -909,7 +909,12 @@ impl<H: HasContext + ?Sized> piet::RenderContext for RenderContext<'_, H> {
     }
 
     fn finish(&mut self) -> Result<(), Pierror> {
-        self.context.finish()
+        self.context.finish()?;
+
+        // Free all of the resources as well.
+        self.context.source_mut().gpu_flushed();
+
+        Ok(())
     }
 
     fn transform(&mut self, transform: kurbo::Affine) {

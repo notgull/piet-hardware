@@ -102,6 +102,12 @@ impl WgpuContext {
     pub fn render<'this>(&'this self, pass: &mut wgpu::RenderPass<'this>) {
         self.source.context().render(pass);
     }
+
+    /// Call this function after you call `wgpu::Queue::submit` to free up resources.
+    pub fn after_submit(&mut self, device: &wgpu::Device) {
+        self.source.gpu_flushed();
+        self.source.context_mut().gpu_flushed(device);
+    }
 }
 
 /// The whole point.

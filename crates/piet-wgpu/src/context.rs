@@ -453,6 +453,16 @@ impl GpuContext {
             }
         }
     }
+
+    /// Run this once the queue has been flushed.
+    pub(crate) fn gpu_flushed(&mut self, device: &wgpu::Device) {
+        let mut buffers_to_clear = self.buffers_to_clear.borrow_mut();
+
+        for buffer in buffers_to_clear.drain() {
+            buffer.borrow_vertex_buffer_mut().clear(device);
+            buffer.borrow_index_buffer_mut().clear(device);
+        }
+    }
 }
 
 impl piet_hardware::GpuContext for GpuContext {

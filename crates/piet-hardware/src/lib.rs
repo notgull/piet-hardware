@@ -213,6 +213,11 @@ impl<C: GpuContext + ?Sized> Source<C> {
     pub fn text_mut(&mut self) -> &mut Text {
         &mut self.text
     }
+
+    /// Indicate that we've flushed the queue and all of the GPU resources can be overwritten.
+    pub fn gpu_flushed(&mut self) {
+        self.mask_context.gpu_flushed();
+    }
 }
 
 /// The whole point of this crate.
@@ -361,11 +366,16 @@ impl<'a, 'b, 'c, C: GpuContext + ?Sized> RenderContext<'a, 'b, 'c, C> {
         );
 
         // Decide which mask and transform to use.
-        let (transform, mask) = if self.ignore_state {
-            (Affine::scale(self.bitmap_scale), &self.source.white_pixel)
+        let (transform, mask_texture, used_mask) = if self.ignore_state {
+            (
+                Affine::scale(self.bitmap_scale),
+                &self.source.white_pixel,
+                false,
+            )
         } else {
             let state = self.state.last_mut().unwrap();
 
+            let has_mask = state.mask.is_some();
             let mask = state
                 .mask
                 .as_mut()
@@ -379,7 +389,11 @@ impl<'a, 'b, 'c, C: GpuContext + ?Sized> RenderContext<'a, 'b, 'c, C> {
                 })
                 .unwrap_or(&self.source.white_pixel);
 
-            (Affine::scale(self.bitmap_scale) * state.transform, mask)
+            (
+                Affine::scale(self.bitmap_scale) * state.transform,
+                mask,
+                has_mask,
+            )
         };
 
         // Decide the texture to use.
@@ -393,7 +407,7 @@ impl<'a, 'b, 'c, C: GpuContext + ?Sized> RenderContext<'a, 'b, 'c, C> {
                 self.queue,
                 self.source.buffers.vbo.resource(),
                 texture.resource(),
-                mask.resource(),
+                mask_texture.resource(),
                 &transform,
                 self.size,
             )
@@ -401,6 +415,13 @@ impl<'a, 'b, 'c, C: GpuContext + ?Sized> RenderContext<'a, 'b, 'c, C> {
 
         // Clear the original buffers.
         self.source.buffers.rasterizer.clear();
+
+        // Mark the mask as used so we don't overwrite it.
+        if used_mask {
+            if let Some(mask) = &mut self.state.last_mut().unwrap().mask {
+                self.source.mask_context.mark_used(mask);
+            }
+        }
 
         Ok(())
     }

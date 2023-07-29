@@ -142,6 +142,9 @@ pub(super) fn run(
                     // Submit the command buffer to the queue.
                     queue.submit(Some(encoder.finish()));
 
+                    // Free up GPU resources.
+                    context.after_submit(device);
+
                     // Present the frame.
                     frame.present();
                 }
