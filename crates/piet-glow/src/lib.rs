@@ -807,6 +807,32 @@ pub struct RenderContext<'a, H: HasContext + ?Sized> {
     text: &'a mut Text,
 }
 
+impl<'a, H: HasContext + ?Sized> RenderContext<'a, H> {
+    /// Get the tolerance for flattening curves.
+    #[inline]
+    pub fn tolerance(&self) -> f64 {
+        self.context.tolerance()
+    }
+
+    /// Set the tolerance for flattening curves.
+    #[inline]
+    pub fn set_tolerance(&mut self, tolerance: f64) {
+        self.context.set_tolerance(tolerance)
+    }
+
+    /// Get the current bitmap scale.
+    #[inline]
+    pub fn bitmap_scale(&self) -> f64 {
+        self.context.bitmap_scale()
+    }
+
+    /// Set the current bitmap scale.
+    #[inline]
+    pub fn set_bitmap_scale(&mut self, scale: f64) {
+        self.context.set_bitmap_scale(scale)
+    }
+}
+
 impl<H: HasContext + ?Sized> piet::RenderContext for RenderContext<'_, H> {
     type Brush = Brush<H>;
 
@@ -883,7 +909,12 @@ impl<H: HasContext + ?Sized> piet::RenderContext for RenderContext<'_, H> {
     }
 
     fn finish(&mut self) -> Result<(), Pierror> {
-        self.context.finish()
+        self.context.finish()?;
+
+        // Free all of the resources as well.
+        self.context.source_mut().gpu_flushed();
+
+        Ok(())
     }
 
     fn transform(&mut self, transform: kurbo::Affine) {

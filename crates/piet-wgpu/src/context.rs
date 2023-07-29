@@ -61,10 +61,10 @@ pub(crate) struct GpuContext {
     pushed_buffers: Vec<DrawOp>,
 
     /// The hash map of uniform buffers.
-    uniform_buffers: HashMap<UniformBytes, (wgpu::Buffer, Rc<wgpu::BindGroup>)>,
+    uniform_buffers: HashMap<UniformBytes, BufferGroup>,
 
     /// Map between colors and buffers containing those colors.
-    color_buffers: HashMap<Color, (wgpu::Buffer, Rc<wgpu::BindGroup>)>,
+    color_buffers: HashMap<Color, BufferGroup>,
 
     /// Bind group layout for the color bffers.
     color_bind_layout: wgpu::BindGroupLayout,
@@ -453,6 +453,16 @@ impl GpuContext {
             }
         }
     }
+
+    /// Run this once the queue has been flushed.
+    pub(crate) fn gpu_flushed(&mut self, device: &wgpu::Device) {
+        let mut buffers_to_clear = self.buffers_to_clear.borrow_mut();
+
+        for buffer in buffers_to_clear.drain() {
+            buffer.borrow_vertex_buffer_mut().clear(device);
+            buffer.borrow_index_buffer_mut().clear(device);
+        }
+    }
 }
 
 impl piet_hardware::GpuContext for GpuContext {
@@ -473,7 +483,7 @@ impl piet_hardware::GpuContext for GpuContext {
 
         // Get the color binding to use.
         let bind_group = match self.color_buffers.entry(color) {
-            Entry::Occupied(o) => o.get().1.clone(),
+            Entry::Occupied(o) => o.get().bind_group.clone(),
             Entry::Vacant(v) => {
                 // Create a new buffer.
                 let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -496,7 +506,10 @@ impl piet_hardware::GpuContext for GpuContext {
                 });
 
                 // Insert it into the set.
-                let (_, bind_group) = v.insert((buffer, Rc::new(bind_group)));
+                let BufferGroup { bind_group, .. } = v.insert(BufferGroup {
+                    bind_group: Rc::new(bind_group),
+                    _buffer: buffer,
+                });
 
                 // Return the bind group.
                 bind_group.clone()
@@ -637,7 +650,7 @@ impl piet_hardware::GpuContext for GpuContext {
         let bytes: UniformBytes = bytemuck::cast(uniforms);
 
         let bind_group = match self.uniform_buffers.entry(bytes) {
-            Entry::Occupied(o) => o.get().1.clone(),
+            Entry::Occupied(o) => o.get().bind_group.clone(),
             Entry::Vacant(entry) => {
                 // Create a new buffer.
                 let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -657,7 +670,10 @@ impl piet_hardware::GpuContext for GpuContext {
                 });
 
                 // Insert it into the set.
-                let (_, bind_group) = entry.insert((buffer, Rc::new(bind_group)));
+                let BufferGroup { bind_group, .. } = entry.insert(BufferGroup {
+                    bind_group: Rc::new(bind_group),
+                    _buffer: buffer,
+                });
 
                 // Return the bind group.
                 bind_group.clone()
@@ -686,6 +702,12 @@ impl piet_hardware::GpuContext for GpuContext {
 
         Ok(())
     }
+}
+
+#[derive(Debug)]
+struct BufferGroup {
+    _buffer: wgpu::Buffer,
+    bind_group: Rc<wgpu::BindGroup>,
 }
 
 fn affine_to_column_major(affine: &Affine) -> [[f32; 4]; 3] {

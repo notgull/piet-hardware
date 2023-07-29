@@ -57,11 +57,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let mut guard = slot.borrow_mut();
                         let context = guard.as_mut().unwrap();
 
-                        // Uses unimplemented bits.
-                        if number == 12 {
-                            return Ok(());
-                        }
-
                         let picture = samples::get(number)?;
                         let size = picture.size();
 
@@ -206,10 +201,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Create a piet-glow render context.
                         let mut rc = unsafe { context.render_context(scaled_width, scaled_height) };
                         piet::RenderContext::text(&mut rc).set_dpi(72.0);
-                        piet::RenderContext::transform(&mut rc, piet::kurbo::Affine::scale(scale));
+                        rc.set_bitmap_scale(scale);
 
                         // Draw with the context.
                         picture.draw(&mut rc)?;
+                        drop(rc);
 
                         // Blit to the render target texture.
                         let ctx = context.context();

@@ -102,6 +102,12 @@ impl WgpuContext {
     pub fn render<'this>(&'this self, pass: &mut wgpu::RenderPass<'this>) {
         self.source.context().render(pass);
     }
+
+    /// Call this function after you call `wgpu::Queue::submit` to free up resources.
+    pub fn after_submit(&mut self, device: &wgpu::Device) {
+        self.source.gpu_flushed();
+        self.source.context_mut().gpu_flushed(device);
+    }
 }
 
 /// The whole point.
@@ -109,6 +115,32 @@ impl WgpuContext {
 pub struct RenderContext<'context, 'device, 'queue> {
     context: piet_hardware::RenderContext<'context, 'device, 'queue, GpuContext>,
     text: &'context mut Text,
+}
+
+impl RenderContext<'_, '_, '_> {
+    /// Get the flattening tolerance.
+    #[inline]
+    pub fn tolerance(&self) -> f64 {
+        self.context.tolerance()
+    }
+
+    /// Set the flattening tolerance.
+    #[inline]
+    pub fn set_tolerance(&mut self, tolerance: f64) {
+        self.context.set_tolerance(tolerance)
+    }
+
+    /// Get the bitmap scale.
+    #[inline]
+    pub fn bitmap_scale(&self) -> f64 {
+        self.context.bitmap_scale()
+    }
+
+    /// Set the bitmap scale.
+    #[inline]
+    pub fn set_bitmap_scale(&mut self, scale: f64) {
+        self.context.set_bitmap_scale(scale)
+    }
 }
 
 impl piet::RenderContext for RenderContext<'_, '_, '_> {

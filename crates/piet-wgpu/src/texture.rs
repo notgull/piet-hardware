@@ -171,7 +171,13 @@ impl BorrowedTextureMut<'_> {
         tracing::debug!(?size, ?format, %data_len, "Writing a texture");
 
         // Get the texture to write to.
-        let texture = if self.0.texture.is_none() || self.0.format != format {
+        let needs_new_texture = self
+            .0
+            .texture
+            .as_ref()
+            .map_or(true, |tex| tex.size() != size)
+            || self.0.format != format;
+        let texture = if needs_new_texture {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(&format!("piet-wgpu texture {}", self.0.id)),
                 size,
@@ -210,6 +216,7 @@ impl BorrowedTextureMut<'_> {
             bytes_per_row: Some(size.width * bytes_per_pixel),
             rows_per_image: Some(size.height),
         };
+
         queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture,
