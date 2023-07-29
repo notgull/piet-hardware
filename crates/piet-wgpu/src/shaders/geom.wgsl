@@ -78,8 +78,8 @@ fn vertex_main(vert: InVertex) -> VertexShaderOutput {
     out.position = unpack_position(pos.xy);
     out.tex_coords = vert.tex_coords;
     out.mask_coords = vec2<f32>(
-        vert.tex_coords.x / uniforms.viewport_size.x,
-        vert.tex_coords.y / uniforms.viewport_size.y,
+        pos.x / uniforms.viewport_size.x,
+        pos.y / uniforms.viewport_size.y,
     );
     out.color = unpack_color(vert.color);
 
