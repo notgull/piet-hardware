@@ -426,8 +426,6 @@ impl<'a, 'b, 'c, C: GpuContext + ?Sized> RenderContext<'a, 'b, 'c, C> {
     fn clip_impl(&mut self, shape: impl Shape) {
         let state = self.state.last_mut().unwrap();
 
-        // Transform the shape if we need to.
-
         let mask = state
             .mask
             .get_or_insert_with(|| Mask::new(self.size.0, self.size.1));
@@ -886,6 +884,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
                 image.texture().resource(),
                 offset,
                 size,
+                self.bitmap_scale,
             )
             .piet_err()?;
 

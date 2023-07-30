@@ -459,6 +459,8 @@ impl GpuContext {
             buffer.borrow_vertex_buffer_mut().clear(device);
             buffer.borrow_index_buffer_mut().clear(device);
         }
+
+        self.pushed_buffers.clear();
     }
 }
 
@@ -579,14 +581,128 @@ impl piet_hardware::GpuContext for GpuContext {
 
     fn capture_area(
         &mut self,
-        _device: &Self::Device,
-        _queue: &Self::Queue,
-        _texture: &Self::Texture,
-        _offset: (u32, u32),
-        _size: (u32, u32),
+        device: &Self::Device,
+        queue: &Self::Queue,
+        texture: &Self::Texture,
+        offset: (u32, u32),
+        size: (u32, u32),
+        bitmap_scale: f64,
     ) -> Result<(), Self::Error> {
-        // TODO: This is hard on wgpu! Look into this later.
-        Err(NotYetSupported)
+        tracing::warn!("capture_area is not performant on the wgpu backend, consider using a software rasterizer instead");
+
+        let (x, y) = offset;
+        let (width, height) = size;
+
+        let (x, y, width, height) = (
+            (x as f64 * bitmap_scale) as u32,
+            (y as f64 * bitmap_scale) as u32,
+            (width as f64 * bitmap_scale) as u32,
+            (height as f64 * bitmap_scale) as u32,
+        );
+
+        // Figure out the size of our texture.
+        let [vwidth, vheight] = self
+            .pushed_buffers
+            .iter()
+            .fold([0.0, 0.0], |mut size, buffer| match buffer {
+                DrawOp::PushedBuffer(buf) => {
+                    if buf.viewport_size[0] > size[0] {
+                        size[0] = buf.viewport_size[0];
+                    }
+
+                    if buf.viewport_size[1] > size[1] {
+                        size[1] = buf.viewport_size[1];
+                    }
+
+                    size
+                }
+                _ => size,
+            });
+
+        // Create the texture to render our current operations into.
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let target_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("piet-wgpu capture_area rendering texture"),
+            size: wgpu::Extent3d {
+                width: vwidth as u32,
+                height: vheight as u32,
+                depth_or_array_layers: 1,
+            },
+            sample_count: 1,
+            mip_level_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[format],
+        });
+        let target_view = target_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Create a render pass for rendering into this texture.
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("piet-wgpu capture_area encoder"),
+        });
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("piet-wgpu capture_area render pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: true,
+                    },
+                })],
+                depth_stencil_attachment: None,
+            });
+
+            // Render ourselves into this pass.
+            self.render(&mut pass);
+        }
+
+        // Schedule an operation on the queue to copy the texture.
+        {
+            let mut texture = texture.borrow_mut();
+            texture.write_texture(
+                device,
+                queue,
+                &self.texture_bind_layout,
+                size,
+                crate::ImageFormat::RgbaSeparate,
+                None,
+            );
+            encoder.copy_texture_to_texture(
+                wgpu::ImageCopyTexture {
+                    texture: &target_texture,
+                    origin: wgpu::Origin3d { x, y, z: 0 },
+                    mip_level: 0,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::ImageCopyTexture {
+                    texture: texture.texture().unwrap(),
+                    origin: wgpu::Origin3d::ZERO,
+                    mip_level: 0,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
+        // Submit the queue using this buffer.
+        let index = queue.submit(Some(encoder.finish()));
+
+        // Wait for the submission to finish.
+        device.poll(wgpu::Maintain::WaitForSubmissionIndex(index));
+
+        // The queue has now been submitted.
+        self.gpu_flushed(device);
+
+        // TODO: Write the texture afterwards to avoid losing data.
+        Ok(())
     }
 
     fn max_texture_size(&mut self, device: &wgpu::Device) -> (u32, u32) {

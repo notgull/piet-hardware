@@ -63,23 +63,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let scaled_width = (size.width * scale) as u32;
                         let scaled_height = (size.height * scale) as u32;
 
+                        let multisampled = number != 16;
+
                         // Create a texture to render into.
                         let ctx = context.context();
-                        let texture = unsafe {
-                            ctx.enable(glow::MULTISAMPLE);
-                            let texture = ctx.create_texture().unwrap();
-                            ctx.bind_texture(glow::TEXTURE_2D_MULTISAMPLE, Some(texture));
-                            ctx.tex_image_2d_multisample(
-                                glow::TEXTURE_2D_MULTISAMPLE,
-                                16,
-                                glow::RGBA as i32,
-                                scaled_width as i32,
-                                scaled_height as i32,
-                                true,
-                            );
-                            ctx.bind_texture(glow::TEXTURE_2D_MULTISAMPLE, None);
+                        let texture = if multisampled {
+                            unsafe {
+                                ctx.enable(glow::MULTISAMPLE);
+                                let texture = ctx.create_texture().unwrap();
+                                ctx.bind_texture(glow::TEXTURE_2D_MULTISAMPLE, Some(texture));
+                                ctx.tex_image_2d_multisample(
+                                    glow::TEXTURE_2D_MULTISAMPLE,
+                                    16,
+                                    glow::RGBA as i32,
+                                    scaled_width as i32,
+                                    scaled_height as i32,
+                                    true,
+                                );
+                                ctx.bind_texture(glow::TEXTURE_2D_MULTISAMPLE, None);
 
-                            texture
+                                Some(texture)
+                            }
+                        } else {
+                            None
                         };
 
                         // Create a normal, non-multisampled texture.
@@ -116,7 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         };
 
                         // Use a framebuffer to render into the texture and make it current.
-                        let framebuffer = unsafe {
+                        let framebuffer = texture.map(|texture| unsafe {
                             let framebuffer = ctx.create_framebuffer().unwrap();
                             ctx.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
                             ctx.bind_texture(glow::TEXTURE_2D_MULTISAMPLE, Some(texture));
@@ -139,7 +145,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ctx.bind_texture(glow::TEXTURE_2D_MULTISAMPLE, None);
 
                             framebuffer
-                        };
+                        });
 
                         // Create an intermediate FBO to use with the render target texture.
                         let intermediate_fbo = unsafe {
@@ -168,20 +174,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         };
 
                         unsafe {
-                            ctx.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
+                            ctx.bind_framebuffer(
+                                glow::FRAMEBUFFER,
+                                Some(if let Some(framebuffer) = framebuffer {
+                                    framebuffer
+                                } else {
+                                    intermediate_fbo
+                                }),
+                            );
                         }
 
                         // Use a renderbuffer to render into the texture and make it current.
                         let renderbuffer = unsafe {
                             let renderbuffer = ctx.create_renderbuffer().unwrap();
                             ctx.bind_renderbuffer(glow::RENDERBUFFER, Some(renderbuffer));
-                            ctx.renderbuffer_storage_multisample(
-                                glow::RENDERBUFFER,
-                                16,
-                                glow::DEPTH_COMPONENT16,
-                                scaled_width as i32,
-                                scaled_height as i32,
-                            );
+
+                            if multisampled {
+                                ctx.renderbuffer_storage_multisample(
+                                    glow::RENDERBUFFER,
+                                    16,
+                                    glow::DEPTH_COMPONENT16,
+                                    scaled_width as i32,
+                                    scaled_height as i32,
+                                );
+                            } else {
+                                ctx.renderbuffer_storage(
+                                    glow::RENDERBUFFER,
+                                    glow::DEPTH_COMPONENT16,
+                                    scaled_width as i32,
+                                    scaled_height as i32,
+                                );
+                            }
                             ctx.framebuffer_renderbuffer(
                                 glow::FRAMEBUFFER,
                                 glow::DEPTH_ATTACHMENT,
@@ -209,22 +232,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         // Blit to the render target texture.
                         let ctx = context.context();
-                        unsafe {
-                            ctx.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(framebuffer));
-                            ctx.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(intermediate_fbo));
-                            ctx.blit_framebuffer(
-                                0,
-                                0,
-                                scaled_width as _,
-                                scaled_height as _,
-                                0,
-                                0,
-                                scaled_width as _,
-                                scaled_height as _,
-                                glow::COLOR_BUFFER_BIT,
-                                glow::NEAREST,
-                            );
-                            ctx.bind_framebuffer(glow::FRAMEBUFFER, Some(intermediate_fbo));
+                        if let Some(framebuffer) = framebuffer {
+                            unsafe {
+                                ctx.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(framebuffer));
+                                ctx.bind_framebuffer(
+                                    glow::DRAW_FRAMEBUFFER,
+                                    Some(intermediate_fbo),
+                                );
+                                ctx.blit_framebuffer(
+                                    0,
+                                    0,
+                                    scaled_width as _,
+                                    scaled_height as _,
+                                    0,
+                                    0,
+                                    scaled_width as _,
+                                    scaled_height as _,
+                                    glow::COLOR_BUFFER_BIT,
+                                    glow::NEAREST,
+                                );
+                                ctx.bind_framebuffer(glow::FRAMEBUFFER, Some(intermediate_fbo));
+                            }
                         }
 
                         // Get the data out of the texture.
@@ -252,8 +280,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         // Delete the texture and framebuffer.
                         unsafe {
-                            ctx.delete_texture(texture);
-                            ctx.delete_framebuffer(framebuffer);
+                            if let Some(texture) = texture {
+                                ctx.delete_texture(texture);
+                            }
+                            if let Some(framebuffer) = framebuffer {
+                                ctx.delete_framebuffer(framebuffer);
+                            }
                             ctx.delete_renderbuffer(renderbuffer);
                         }
 

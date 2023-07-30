@@ -107,6 +107,11 @@ impl WgpuTexture {
 pub(crate) struct BorrowedTextureMut<'a>(RefMut<'a, TextureInner>);
 
 impl BorrowedTextureMut<'_> {
+    /// Get a reference to the inner texture.
+    pub(crate) fn texture(&self) -> Option<&wgpu::Texture> {
+        self.0.texture.as_ref()
+    }
+
     /// Write data to this texture.
     pub(crate) fn write_texture(
         &mut self,

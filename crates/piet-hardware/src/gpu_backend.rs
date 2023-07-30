@@ -130,6 +130,7 @@ pub trait GpuContext {
         texture: &Self::Texture,
         offset: (u32, u32),
         size: (u32, u32),
+        bitmap_scale: f64,
     ) -> Result<(), Self::Error>;
 
     /// Push buffer data to the GPU.
@@ -160,8 +161,9 @@ impl<C: GpuContext + ?Sized> GpuContext for &mut C {
         texture: &Self::Texture,
         offset: (u32, u32),
         size: (u32, u32),
+        bitmap_scale: f64,
     ) -> Result<(), Self::Error> {
-        (**self).capture_area(device, queue, texture, offset, size)
+        (**self).capture_area(device, queue, texture, offset, size, bitmap_scale)
     }
 
     fn clear(&mut self, device: &Self::Device, queue: &Self::Queue, color: piet::Color) {

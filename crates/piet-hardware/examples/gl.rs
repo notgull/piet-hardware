@@ -763,6 +763,7 @@ impl piet_hardware::GpuContext for GlContext {
         texture: &Self::Texture,
         offset: (u32, u32),
         size: (u32, u32),
+        scale: f64,
     ) -> Result<(), Self::Error> {
         // Use glReadPixels to read into the texture.
         self.assert_context();
@@ -770,6 +771,12 @@ impl piet_hardware::GpuContext for GlContext {
         unsafe {
             let (x, y) = offset;
             let (width, height) = size;
+            let (x, y, width, height) = (
+                (x as f64 * scale) as i32,
+                (y as f64 * scale) as i32,
+                (width as f64 * scale) as i32,
+                (height as f64 * scale) as i32,
+            );
             let mut buffer = vec![0u8; (width * height * 4) as usize];
 
             gl::ReadPixels(
