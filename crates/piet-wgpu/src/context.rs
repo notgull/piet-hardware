@@ -71,6 +71,9 @@ pub(crate) struct GpuContext {
 
     /// List of vertex buffers that need to be cleared.
     buffers_to_clear: RefCell<HashSet<WgpuVertexBuffer>>,
+
+    /// A singular white pixel.
+    white_pixel: Rc<wgpu::BindGroup>,
 }
 
 /// An operation that can be performed by the context.
@@ -215,6 +218,7 @@ impl GpuContext {
     /// Create a new GPU context.
     pub(crate) fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         output_color_format: wgpu::TextureFormat,
         output_depth_format: Option<wgpu::TextureFormat>,
         samples: u32,
@@ -418,6 +422,55 @@ impl GpuContext {
             multiview: None,
         });
 
+        // Create a texture, repeating, with a singular white pixel.
+        let white_pixel = {
+            let texture = device.create_texture_with_data(
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: Some("piet-wgpu white pixel texture"),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: output_color_format,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[output_color_format],
+                },
+                &[0xFF, 0xFF, 0xFF, 0xFF],
+            );
+
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("piet-wgpu white pixel sampler"),
+                address_mode_u: wgpu::AddressMode::Repeat,
+                address_mode_v: wgpu::AddressMode::Repeat,
+                address_mode_w: wgpu::AddressMode::Repeat,
+                mag_filter: wgpu::FilterMode::Nearest,
+                min_filter: wgpu::FilterMode::Nearest,
+                ..Default::default()
+            });
+
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("piet-wgpu white pixel"),
+                layout: &texture_buffer_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(
+                            &texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            })
+        };
+
         Self {
             geometry_pipeline,
             clear_pipeline,
@@ -429,6 +482,7 @@ impl GpuContext {
             color_buffers: HashMap::new(),
             next_id: 0,
             buffers_to_clear: RefCell::new(HashSet::new()),
+            white_pixel: Rc::new(white_pixel),
         }
     }
 
@@ -459,6 +513,88 @@ impl GpuContext {
             buffer.borrow_vertex_buffer_mut().clear(device);
             buffer.borrow_index_buffer_mut().clear(device);
         }
+
+        self.pushed_buffers.clear();
+    }
+
+    /// Draw a texture encompassing the entire screen.
+    fn push_texture_draw_op(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &WgpuTexture,
+        [viewport_width, viewport_height]: [f32; 2],
+    ) {
+        macro_rules! make_vertex {
+            ($px:expr,$py:expr,$ux:expr,$uy:expr) => {{
+                Vertex {
+                    pos: [$px, $py],
+                    uv: [$ux, $uy],
+                    color: [0xFF, 0xFF, 0xFF, 0xFF],
+                }
+            }};
+        }
+
+        const RECTANGLE: &[Vertex] = &[
+            make_vertex!(-1.0, -1.0, 0.0, 0.0),
+            make_vertex!(1.0, -1.0, 1.0, 0.0),
+            make_vertex!(-1.0, 1.0, 0.0, 1.0),
+            make_vertex!(1.0, -1.0, 1.0, 0.0),
+            make_vertex!(1.0, 1.0, 1.0, 1.0),
+            make_vertex!(-1.0, 1.0, 0.0, 1.0),
+        ];
+
+        // Add a new draw operation that uses the target texture to draw a rectangle on the
+        // screen.
+        let buffers = WgpuVertexBuffer::new([self.next_id(), self.next_id()], device);
+        let vertex = {
+            let mut vb = buffers.borrow_vertex_buffer_mut();
+            vb.write_buffer(device, queue, bytemuck::cast_slice(RECTANGLE));
+            vb.pop_slice()
+        };
+        let index = {
+            const INDEXES: &[usize] = &[0, 1, 2, 3, 4, 5, 6];
+
+            let mut ib = buffers.borrow_index_buffer_mut();
+            ib.write_buffer(device, queue, bytemuck::cast_slice(INDEXES));
+            ib.pop_slice()
+        };
+
+        // Create a uniform buffer for the viewport size.
+        let uniforms = {
+            let uniforms = Uniforms {
+                viewport_size: [viewport_width, viewport_height],
+                pad: [0xFFFFFFFF; 2],
+                transform: affine_to_column_major(&Affine::IDENTITY),
+            };
+
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("piet-wgpu capture_area texture uniform buffer"),
+                contents: bytemuck::bytes_of(&uniforms),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("piet-wgpu capture_area texture uniform bind group"),
+                layout: &self.uniform_bind_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            })
+        };
+
+        self.pushed_buffers.push(DrawOp::PushedBuffer(PushedBuffer {
+            vertex: vertex.range(),
+            index: index.range(),
+            color_texture: texture.bind_group(),
+            mask_texture: self.white_pixel.clone(),
+            vertex_buffer: buffers.borrow_vertex_buffer().get(vertex).unwrap().clone(),
+            index_buffer: buffers.borrow_index_buffer().get(index).unwrap().clone(),
+            buffers: buffers.clone(),
+            viewport_size: [viewport_width, viewport_height],
+            uniform_bind_group: Rc::new(uniforms),
+        }));
     }
 }
 
@@ -533,6 +669,7 @@ impl piet_hardware::GpuContext for GpuContext {
             device,
             interpolation,
             repeat,
+            false,
         ))
     }
 
@@ -579,14 +716,134 @@ impl piet_hardware::GpuContext for GpuContext {
 
     fn capture_area(
         &mut self,
-        _device: &Self::Device,
-        _queue: &Self::Queue,
-        _texture: &Self::Texture,
-        _offset: (u32, u32),
-        _size: (u32, u32),
+        device: &Self::Device,
+        queue: &Self::Queue,
+        texture: &Self::Texture,
+        offset: (u32, u32),
+        size: (u32, u32),
+        bitmap_scale: f64,
     ) -> Result<(), Self::Error> {
-        // TODO: This is hard on wgpu! Look into this later.
-        Err(NotYetSupported)
+        tracing::warn!("capture_area is not performant on the wgpu backend, consider using a software rasterizer instead");
+
+        let (x, y) = offset;
+        let (width, height) = size;
+
+        let (x, y, width, height) = (
+            (x as f64 * bitmap_scale) as u32,
+            (y as f64 * bitmap_scale) as u32,
+            (width as f64 * bitmap_scale) as u32,
+            (height as f64 * bitmap_scale) as u32,
+        );
+
+        // Figure out the size of our texture.
+        let [vwidth, vheight] = self
+            .pushed_buffers
+            .iter()
+            .fold([0.0, 0.0], |mut size, buffer| match buffer {
+                DrawOp::PushedBuffer(buf) => {
+                    if buf.viewport_size[0] > size[0] {
+                        size[0] = buf.viewport_size[0];
+                    }
+
+                    if buf.viewport_size[1] > size[1] {
+                        size[1] = buf.viewport_size[1];
+                    }
+
+                    size
+                }
+                _ => size,
+            });
+
+        // Create the texture to render our current operations into.
+        let target_texture_block: WgpuTexture = WgpuTexture::create_texture(
+            self.next_id(),
+            device,
+            crate::InterpolationMode::Bilinear,
+            piet_hardware::RepeatStrategy::Clamp,
+            true,
+        );
+        let mut target_texture = target_texture_block.borrow_mut();
+        target_texture.write_texture(
+            device,
+            queue,
+            &self.texture_bind_layout,
+            (vwidth as u32, vheight as u32),
+            crate::ImageFormat::RgbaSeparate,
+            None,
+        );
+        let target_view = target_texture
+            .texture()
+            .unwrap()
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Create a render pass for rendering into this texture.
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("piet-wgpu capture_area encoder"),
+        });
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("piet-wgpu capture_area render pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: true,
+                    },
+                })],
+                depth_stencil_attachment: None,
+            });
+
+            // Render ourselves into this pass.
+            self.render(&mut pass);
+        }
+
+        // Schedule an operation on the queue to copy the texture.
+        {
+            let mut texture = texture.borrow_mut();
+            texture.write_texture(
+                device,
+                queue,
+                &self.texture_bind_layout,
+                (width, height),
+                crate::ImageFormat::RgbaSeparate,
+                None,
+            );
+            encoder.copy_texture_to_texture(
+                wgpu::ImageCopyTexture {
+                    texture: target_texture.texture().unwrap(),
+                    origin: wgpu::Origin3d { x, y, z: 0 },
+                    mip_level: 0,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::ImageCopyTexture {
+                    texture: texture.texture().unwrap(),
+                    origin: wgpu::Origin3d::ZERO,
+                    mip_level: 0,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
+        // Submit the queue using this buffer.
+        let index = queue.submit(Some(encoder.finish()));
+
+        // Wait for the submission to finish.
+        device.poll(wgpu::Maintain::WaitForSubmissionIndex(index));
+
+        // The queue has now been submitted.
+        self.gpu_flushed(device);
+
+        // Write the texture to the screen afterwards to avoid losing data.
+        drop(target_texture);
+        self.push_texture_draw_op(device, queue, &target_texture_block, [vwidth, vheight]);
+        Ok(())
     }
 
     fn max_texture_size(&mut self, device: &wgpu::Device) -> (u32, u32) {

@@ -43,16 +43,11 @@ async fn entry() -> ! {
         .expect("Failed to create device");
 
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    let samples = 16;
-
-    let context = piet_wgpu::WgpuContext::new(&device, &queue, format, None, samples);
 
     // Sigh...
     struct WgpuState {
-        context: piet_wgpu::WgpuContext,
         device: wgpu::Device,
         queue: wgpu::Queue,
-        samples: u32,
         format: wgpu::TextureFormat,
     }
 
@@ -62,10 +57,8 @@ async fn entry() -> ! {
     }
     DEVICE_AND_QUEUE.with(move |slot| {
         *slot.borrow_mut() = Some(WgpuState {
-            context,
             device,
             queue,
-            samples,
             format,
         })
     });
@@ -77,15 +70,13 @@ async fn entry() -> ! {
                 let mut guard = daq.borrow_mut();
                 let state = guard.as_mut().unwrap();
 
-                let context = &mut state.context;
                 let device = &state.device;
                 let queue = &state.queue;
-                let samples = state.samples;
                 let format = state.format;
 
-                if number == 16 {
-                    return Ok(());
-                }
+                let multisampled = number != 16;
+                let samples = if multisampled { 16 } else { 1 };
+                let mut context = piet_wgpu::WgpuContext::new(device, queue, format, None, samples);
 
                 // Get the picture.
                 let picture = samples::get(number)?;
@@ -156,8 +147,16 @@ async fn entry() -> ! {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: None,
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &msaa_texture_view,
-                            resolve_target: Some(&texture_view),
+                            view: if multisampled {
+                                &msaa_texture_view
+                            } else {
+                                &texture_view
+                            },
+                            resolve_target: if multisampled {
+                                Some(&texture_view)
+                            } else {
+                                None
+                            },
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                                 store: true,
@@ -233,6 +232,7 @@ async fn entry() -> ! {
 }
 
 fn main() -> ! {
+    tracing_subscriber::fmt::init();
     futures_lite::future::block_on(entry())
 }
 

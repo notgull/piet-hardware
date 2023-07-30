@@ -421,9 +421,18 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
         texture: &Self::Texture,
         offset: (u32, u32),
         size: (u32, u32),
+        scale: f64,
     ) -> Result<(), Self::Error> {
         let (x, y) = offset;
         let (width, height) = size;
+
+        // Scale up by the bitmap scale.
+        let (x, y, width, height) = (
+            (x as f64 * scale).floor() as u32,
+            (y as f64 * scale).floor() as u32,
+            (width as f64 * scale).ceil() as u32,
+            (height as f64 * scale).ceil() as u32,
+        );
 
         // Create a buffer to hold the pixels.
         // A little bit more at the end is allocated for the inversion.
@@ -451,7 +460,12 @@ impl<H: HasContext + ?Sized> piet_hardware::GpuContext for GpuContext<H> {
             );
         }
 
-        gl_error(&*self.context);
+        // If we got an error, propagate it.
+        if unsafe { self.context.get_error() } != glow::NO_ERROR {
+            // TODO: If this is an MSAA texture, maybe try the framebuffer trick.
+            gl_error(&*self.context);
+            return Err(GlError("failed to read pixels".into()));
+        }
 
         // Invert the y axis, making sure to use the little bit at the end of the buffer as
         // temporary storage.
