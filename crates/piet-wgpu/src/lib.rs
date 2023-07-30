@@ -70,7 +70,7 @@ impl WgpuContext {
         samples: u32,
     ) -> Self {
         let source = piet_hardware::Source::new(
-            GpuContext::new(device, format, depth_format, samples),
+            GpuContext::new(device, queue, format, depth_format, samples),
             device,
             queue,
         )

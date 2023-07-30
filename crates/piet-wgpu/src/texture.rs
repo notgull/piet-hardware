@@ -35,6 +35,7 @@ impl WgpuTexture {
         device: &wgpu::Device,
         interpolation: InterpolationMode,
         repeat: RepeatStrategy,
+        renderable: bool,
     ) -> Self {
         let filter_mode = match interpolation {
             InterpolationMode::Bilinear => wgpu::FilterMode::Linear,
@@ -84,6 +85,7 @@ impl WgpuTexture {
             border_color,
             address_mode,
             bind_group: None,
+            renderable,
         })))
     }
 
@@ -180,6 +182,11 @@ impl BorrowedTextureMut<'_> {
             .map_or(true, |tex| tex.size() != size)
             || self.0.format != format;
         let texture = if needs_new_texture {
+            let mut usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
+            if self.0.renderable {
+                usage |= wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC;
+            }
+
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(&format!("piet-wgpu texture {}", self.0.id)),
                 size,
@@ -187,7 +194,7 @@ impl BorrowedTextureMut<'_> {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu_format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                usage,
                 view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
             });
 
@@ -327,6 +334,9 @@ struct TextureInner {
 
     /// The bind group to use to bind to the pipeline.
     bind_group: Option<Rc<wgpu::BindGroup>>,
+
+    /// Whether to make the texture renderable.
+    renderable: bool,
 }
 
 impl TextureInner {

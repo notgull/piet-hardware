@@ -859,6 +859,10 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
     fn capture_image_area(&mut self, src_rect: impl Into<Rect>) -> Result<Self::Image, Pierror> {
         let src_rect = src_rect.into();
         let src_size = src_rect.size();
+        let src_bitmap_size = Size::new(
+            src_size.width * self.bitmap_scale,
+            src_size.height * self.bitmap_scale,
+        );
 
         // Create a new texture to copy the image to.
         let image = {
@@ -870,7 +874,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
             )
             .piet_err()?;
 
-            Image::new(texture, src_size)
+            Image::new(texture, src_bitmap_size)
         };
 
         // Capture the area in the texture.
