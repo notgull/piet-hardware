@@ -897,12 +897,63 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
 
     fn blurred_rect(
         &mut self,
-        _rect: Rect,
-        _blur_radius: f64,
-        _brush: &impl piet::IntoBrush<Self>,
+        input_rect: Rect,
+        blur_radius: f64,
+        brush: &impl piet::IntoBrush<Self>,
     ) {
-        tracing::warn!("blurred_rect is not supported");
-        self.status = Err(Pierror::NotSupported);
+        let size = piet::util::size_for_blurred_rect(input_rect, blur_radius);
+        let width = size.width as u32;
+        let height = size.height as u32;
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        // Compute the blurred rectangle image.
+        let (mask, rect_exp) = {
+            let mut mask = tiny_skia::Mask::new(width, height).unwrap();
+
+            let rect_exp = piet::util::compute_blurred_rect(
+                input_rect,
+                blur_radius,
+                width.try_into().unwrap(),
+                mask.data_mut(),
+            );
+
+            (mask, rect_exp)
+        };
+
+        // Create an image using this mask.
+        let mut image = tiny_skia::Pixmap::new(width, height)
+            .expect("Pixmap width/height should be valid clipmask width/height");
+        let shader = match brush.make_brush(self, || input_rect).to_shader() {
+            Some(shader) => shader,
+            None => {
+                self.status = Err(Pierror::BackendError("Failed to create shader".into()));
+                return;
+            }
+        };
+        image.fill(tiny_skia::Color::TRANSPARENT);
+        image.fill_rect(
+            tiny_skia::Rect::from_xywh(0., 0., width as f32, height as f32).unwrap(),
+            &tiny_skia::Paint {
+                shader,
+                ..Default::default()
+            },
+            tiny_skia::Transform::identity(),
+            Some(&mask),
+        );
+
+        // Draw this image.
+        let image = leap!(
+            self,
+            self.make_image(
+                width as usize,
+                height as usize,
+                image.data(),
+                piet::ImageFormat::RgbaSeparate
+            )
+        );
+        self.draw_image(&image, rect_exp, piet::InterpolationMode::Bilinear);
     }
 
     fn current_transform(&self) -> Affine {

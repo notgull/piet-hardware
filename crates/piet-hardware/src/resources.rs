@@ -226,19 +226,19 @@ impl<C: GpuContext + ?Sized> VertexBuffer<C> {
     }
 }
 
-fn convert_to_ts_point(point: piet::kurbo::Point) -> tiny_skia::Point {
+pub(crate) fn convert_to_ts_point(point: piet::kurbo::Point) -> tiny_skia::Point {
     tiny_skia::Point {
         x: point.x as f32,
         y: point.y as f32,
     }
 }
 
-fn convert_to_ts_color(color: piet::Color) -> tiny_skia::Color {
+pub(crate) fn convert_to_ts_color(color: piet::Color) -> tiny_skia::Color {
     let (r, g, b, a) = color.as_rgba();
 
     tiny_skia::Color::from_rgba(r as f32, g as f32, b as f32, a as f32).expect("Invalid color")
 }
 
-fn convert_to_ts_gradient_stop(grad_stop: &GradientStop) -> tiny_skia::GradientStop {
+pub(crate) fn convert_to_ts_gradient_stop(grad_stop: &GradientStop) -> tiny_skia::GradientStop {
     tiny_skia::GradientStop::new(grad_stop.pos, convert_to_ts_color(grad_stop.color))
 }

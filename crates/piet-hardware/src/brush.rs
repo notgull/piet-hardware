@@ -20,11 +20,11 @@
 
 use super::gpu_backend::{GpuContext, RepeatStrategy, Vertex};
 use super::image::Image;
-use super::resources::Texture;
+use super::resources::{self, Texture};
 use super::{RenderContext, ResultExt, UV_WHITE};
 
 use piet::kurbo::{Affine, Circle, Point, Rect, Shape};
-use piet::{Error as Pierror, FixedLinearGradient, FixedRadialGradient};
+use piet::{Error as Pierror, FixedGradient, FixedLinearGradient, FixedRadialGradient};
 
 use std::borrow::Cow;
 
@@ -50,6 +50,9 @@ enum BrushInner<C: GpuContext + ?Sized> {
 
         /// The transformation to translate UV texture points by.
         transform: Affine,
+
+        /// The fixed gradient to apply.
+        gradient: FixedGradient,
     },
 }
 
@@ -88,7 +91,7 @@ impl<C: GpuContext + ?Sized> Brush<C> {
         let bounds = Rect::from_points(gradient.start, gradient.end);
         let offset = -bounds.origin().to_vec2();
         texture.write_linear_gradient(context, device, queue, &gradient, bounds.size(), offset)?;
-        Ok(Self::textured(texture, bounds.size(), transform))
+        Ok(Self::textured(texture, bounds.size(), transform, gradient))
     }
 
     /// Create a new brush from a radial gradient.
@@ -111,15 +114,24 @@ impl<C: GpuContext + ?Sized> Brush<C> {
         let transform = scale_and_offset(bounds.size(), bounds.origin());
 
         texture.write_radial_gradient(context, device, queue, &gradient, bounds.size(), offset)?;
-        Ok(Self::textured(texture, bounds.size(), transform))
+        Ok(Self::textured(texture, bounds.size(), transform, gradient))
     }
 
     /// Create a new brush from a texture.
-    fn textured(texture: Texture<C>, size: kurbo::Size, transform: Affine) -> Self {
+    fn textured(
+        texture: Texture<C>,
+        size: kurbo::Size,
+        transform: Affine,
+        gradient: impl Into<FixedGradient>,
+    ) -> Self {
         // Create a new image.
         let image = Image::new(texture, size);
 
-        Self(BrushInner::Texture { image, transform })
+        Self(BrushInner::Texture {
+            image,
+            transform,
+            gradient: gradient.into(),
+        })
     }
 
     /// Get the texture associated with this brush.
@@ -152,15 +164,57 @@ impl<C: GpuContext + ?Sized> Brush<C> {
             }
         }
     }
+
+    pub(crate) fn to_shader(&self) -> Option<tiny_skia::Shader<'static>> {
+        match &self.0 {
+            BrushInner::Solid(color) => Some(tiny_skia::Shader::SolidColor(
+                resources::convert_to_ts_color(*color),
+            )),
+            BrushInner::Texture {
+                gradient: FixedGradient::Linear(linear),
+                ..
+            } => tiny_skia::LinearGradient::new(
+                resources::convert_to_ts_point(linear.start),
+                resources::convert_to_ts_point(linear.end),
+                linear
+                    .stops
+                    .iter()
+                    .map(resources::convert_to_ts_gradient_stop)
+                    .collect(),
+                tiny_skia::SpreadMode::Pad,
+                tiny_skia::Transform::identity(),
+            ),
+            BrushInner::Texture {
+                gradient: FixedGradient::Radial(radial),
+                ..
+            } => tiny_skia::RadialGradient::new(
+                resources::convert_to_ts_point(radial.center + radial.origin_offset),
+                resources::convert_to_ts_point(radial.center),
+                radial.radius as f32,
+                radial
+                    .stops
+                    .iter()
+                    .map(resources::convert_to_ts_gradient_stop)
+                    .collect(),
+                tiny_skia::SpreadMode::Pad,
+                tiny_skia::Transform::identity(),
+            ),
+        }
+    }
 }
 
 impl<C: GpuContext + ?Sized> Clone for BrushInner<C> {
     fn clone(&self) -> Self {
         match self {
             Self::Solid(color) => Self::Solid(*color),
-            Self::Texture { image, transform } => Self::Texture {
+            Self::Texture {
+                image,
+                transform,
+                gradient,
+            } => Self::Texture {
                 image: image.clone(),
                 transform: *transform,
+                gradient: gradient.clone(),
             },
         }
     }
