@@ -6,6 +6,7 @@ packages:
 - libx11-xcb-dev
 - libxcb1-dev
 - libxkbcommon-dev
+- pkg-config
 sources:
 - https://git.sr.ht/~notgull/piet-hardware
 secrets:
