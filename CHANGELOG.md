@@ -2,6 +2,10 @@
 
 This log describes changes in the `piet-hardware`, `piet-glow` and `piet-wgpu` crates.
 
+## piet-hardware 0.4.0
+
+- **Breaking:** Add a new scale parameter to `capture_area`.
+
 ## piet-glow 0.1.4
 
 - Update to the newest `piet-hardware` version.
