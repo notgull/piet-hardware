@@ -1,1 +1,0 @@
-../../LICENSE-LGPL-3.0.md

@@ -1,1 +1,0 @@
-../../LICENSE-MPL-2.0.md

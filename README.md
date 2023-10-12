@@ -1,22 +1,10 @@
 # piet-hardware
 
-A set of implementations of [`piet`], Rust's 2D vector graphics library, using GPU primitives. The goal is to provide fast and high quality graphics rendering using a familiar API.
+`piet-hardware` is a strategy for implementing the [`piet`] drawing interface using GPU primitives. The goal is to break down the drawing operations to rendering textured triangles. The resulting buffers are than passed to the GPU backend for rendering.
 
-The [`piet-hardware`] crate is the centerpiece of this project. It translates the [`piet`] API calls down to rendering textured triangles. In turn, it sends these rendering calls to a structure implementing the `GpuContext` interface. This trait represents the lower level hardware calls.
-
-In addition to [`piet-hardware`], this project also contains some crates that implement the [`piet`] API using [`piet-hardware`]. These are:
-
-- [`piet-glow`], an implementation of [`piet`] using the [`glow`] crate for OpenGL and WebGL calls.
-- [`piet-wgpu`], an implementation of [`piet`] using the [`wgpu`] crate.
-
-There are no official implementations planned for Vulkan, Metal or Direct3D, since [`wgpu`] can be implemented over all of these APIs, therefore [`piet-wgpu`] can be used for all of them. Please open an issue if you think an important graphics API is missing!
+As `piet-hardware` simply implements the high-level strategy, it has no unsafe code. The actual GPU calls are forwarded to an object that implements `GpuContext`. This object is intended to be an interface to OpenGL, Vulkan, Metal, or other GPU APIs.
 
 [`piet`]: https://crates.io/crates/piet
-[`piet-hardware`]: ./crates/piet-hardware/README.md
-[`piet-glow`]: ./crates/piet-glow/README.md
-[`piet-wgpu`]: ./crates/piet-wgpu/README.md
-[`glow`]: https://crates.io/crates/glow
-[`wgpu`]: https://crates.io/crates/wgpu
 
 ## License
 
