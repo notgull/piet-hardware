@@ -3,6 +3,10 @@
 This log describes changes in the `piet-hardware`, `piet-glow` and `piet-wgpu`
 crates.
 
+## piet-hardware 0.4.1
+
+- Moved source code to `src.notgull.net`.
+
 ## piet-hardware 0.4.0
 
 - **Breaking:** Add a new scale parameter to `capture_area`.
