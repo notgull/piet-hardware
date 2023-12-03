@@ -21,7 +21,7 @@ steps:
     image: notgull/ci:latest
     pull: always
     commands:
-      - ensure_tool.sh x11
+      - ensure_tool.sh wayland x11
       - test_rust.sh stable
 ---
 kind: pipeline
@@ -36,7 +36,7 @@ steps:
     image: notgull/ci:latest
     pull: always
     commands:
-      - ensure_tool.sh x11
+      - ensure_tool.sh wayland x11
       - test_rust.sh beta
 ---
 kind: pipeline
@@ -51,7 +51,7 @@ steps:
     image: notgull/ci:latest
     pull: always
     commands:
-      - ensure_tool.sh x11
+      - ensure_tool.sh wayland x11
       - test_rust.sh nightly
 ---
 kind: pipeline
@@ -66,7 +66,7 @@ steps:
     image: notgull/ci:latest
     pull: always
     commands:
-      - ensure_tool.sh x11
+      - ensure_tool.sh wayland x11
       - test_rust.sh 1.65.0
 ---
 kind: pipeline
