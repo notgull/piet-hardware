@@ -18,7 +18,7 @@
 
 //! Defines the GPU backend for piet-hardware.
 
-use piet::kurbo::Affine;
+use piet::kurbo::{Affine, Rect};
 use piet::InterpolationMode;
 
 use std::error::Error;
@@ -69,28 +69,10 @@ pub trait GpuContext {
     ) -> Result<Self::Texture, Self::Error>;
 
     /// Write an image to a texture.
-    fn write_texture(
-        &mut self,
-        device: &Self::Device,
-        queue: &Self::Queue,
-        texture: &Self::Texture,
-        size: (u32, u32),
-        format: piet::ImageFormat,
-        data: Option<&[u8]>,
-    );
+    fn write_texture(&mut self, texture_write: TextureWrite<'_, Self>);
 
     /// Write a sub-image to a texture.
-    #[allow(clippy::too_many_arguments)]
-    fn write_subtexture(
-        &mut self,
-        device: &Self::Device,
-        queue: &Self::Queue,
-        texture: &Self::Texture,
-        offset: (u32, u32),
-        size: (u32, u32),
-        format: piet::ImageFormat,
-        data: &[u8],
-    );
+    fn write_subtexture(&mut self, subtexture_write: SubtextureWrite<'_, Self>);
 
     /// Set the interpolation mode for a texture.
     fn set_texture_interpolation(
@@ -123,28 +105,111 @@ pub trait GpuContext {
     );
 
     /// Capture an area from the screen and put it into a texture.
-    fn capture_area(
-        &mut self,
-        device: &Self::Device,
-        queue: &Self::Queue,
-        texture: &Self::Texture,
-        offset: (u32, u32),
-        size: (u32, u32),
-        bitmap_scale: f64,
-    ) -> Result<(), Self::Error>;
+    fn capture_area(&mut self, area_capture: AreaCapture<'_, Self>) -> Result<(), Self::Error>;
 
     /// Push buffer data to the GPU.
-    #[allow(clippy::too_many_arguments)]
-    fn push_buffers(
-        &mut self,
-        device: &Self::Device,
-        queue: &Self::Queue,
-        vertex_buffer: &Self::VertexBuffer,
-        current_texture: &Self::Texture,
-        mask_texture: &Self::Texture,
-        transform: &Affine,
-        size: (u32, u32),
-    ) -> Result<(), Self::Error>;
+    ///
+    /// The backend is expected to set up a renderer that renders data in `vertex_buffer`,
+    /// using `current_texture` to fill the triangles and `mask_texture` to clip them. In addition,
+    /// the parameters `transform`, `viewport_size` and `clip` are also expected to be used.
+    fn push_buffers(&mut self, buffer_push: BufferPush<'_, Self>) -> Result<(), Self::Error>;
+}
+
+/// The data necessary to write an image into a texture.
+pub struct TextureWrite<'a, C: GpuContext + ?Sized> {
+    /// The device to render onto.
+    pub device: &'a C::Device,
+
+    /// The queue to push the operation into.
+    pub queue: &'a C::Queue,
+
+    /// The texture to write into.
+    pub texture: &'a C::Texture,
+
+    /// The size of the image.
+    pub size: (u32, u32),
+
+    /// The format of the image.
+    pub format: piet::ImageFormat,
+
+    /// The data to write.
+    ///
+    /// This is `None` if you want to write only zeroes.
+    pub data: Option<&'a [u8]>,
+}
+
+/// The data necessary to write an image into a portion of a texture.
+pub struct SubtextureWrite<'a, C: GpuContext + ?Sized> {
+    /// The device to render onto.
+    pub device: &'a C::Device,
+
+    /// The queue to push the operation into.
+    pub queue: &'a C::Queue,
+
+    /// The texture to write into.
+    pub texture: &'a C::Texture,
+
+    /// The offset to start writing at.
+    pub offset: (u32, u32),
+
+    /// The size of the image.
+    pub size: (u32, u32),
+
+    /// The format of the image.
+    pub format: piet::ImageFormat,
+
+    /// The data to write.
+    pub data: &'a [u8],
+}
+
+/// The data necessary to capture an area of the screen.
+pub struct AreaCapture<'a, C: GpuContext + ?Sized> {
+    /// The device to render onto.
+    pub device: &'a C::Device,
+
+    /// The queue to push the operation into.
+    pub queue: &'a C::Queue,
+
+    /// The texture to write into.
+    pub texture: &'a C::Texture,
+
+    /// The offset to start at.
+    pub offset: (u32, u32),
+
+    /// The size of the rectangle to capture.
+    pub size: (u32, u32),
+
+    /// The current bitmap scale.
+    pub bitmap_scale: f64,
+}
+
+/// The data necessary to push buffer data to the GPU.
+pub struct BufferPush<'a, C: GpuContext + ?Sized> {
+    /// The device to render onto.
+    pub device: &'a C::Device,
+
+    /// The queue to push the operation into.
+    pub queue: &'a C::Queue,
+
+    /// The vertex buffer to use when pushing data.
+    pub vertex_buffer: &'a C::VertexBuffer,
+
+    /// The texture to use as the background.
+    pub current_texture: &'a C::Texture,
+
+    /// The texture to use as the mask.
+    pub mask_texture: &'a C::Texture,
+
+    /// The transformation to apply to the vertices.
+    pub transform: &'a Affine,
+
+    /// The size of the viewport.
+    pub viewport_size: (u32, u32),
+
+    /// The rectangle to clip vertices to.
+    ///
+    /// This is sometimes known as the "scissor rect".
+    pub clip: Option<Rect>,
 }
 
 impl<C: GpuContext + ?Sized> GpuContext for &mut C {
@@ -154,16 +219,25 @@ impl<C: GpuContext + ?Sized> GpuContext for &mut C {
     type VertexBuffer = C::VertexBuffer;
     type Error = C::Error;
 
-    fn capture_area(
-        &mut self,
-        device: &Self::Device,
-        queue: &Self::Queue,
-        texture: &Self::Texture,
-        offset: (u32, u32),
-        size: (u32, u32),
-        bitmap_scale: f64,
-    ) -> Result<(), Self::Error> {
-        (**self).capture_area(device, queue, texture, offset, size, bitmap_scale)
+    fn capture_area(&mut self, area_capture: AreaCapture<'_, Self>) -> Result<(), Self::Error> {
+        // Convert &C to C
+        let AreaCapture {
+            device,
+            queue,
+            texture,
+            offset,
+            size,
+            bitmap_scale,
+        } = area_capture;
+
+        (**self).capture_area(AreaCapture {
+            device,
+            queue,
+            texture,
+            offset,
+            size,
+            bitmap_scale,
+        })
     }
 
     fn clear(&mut self, device: &Self::Device, queue: &Self::Queue, color: piet::Color) {
@@ -194,25 +268,29 @@ impl<C: GpuContext + ?Sized> GpuContext for &mut C {
         (**self).max_texture_size(device)
     }
 
-    fn push_buffers(
-        &mut self,
-        device: &Self::Device,
-        queue: &Self::Queue,
-        vertex_buffer: &Self::VertexBuffer,
-        current_texture: &Self::Texture,
-        mask_texture: &Self::Texture,
-        transform: &Affine,
-        size: (u32, u32),
-    ) -> Result<(), Self::Error> {
-        (**self).push_buffers(
+    fn push_buffers(&mut self, buffer_push: BufferPush<'_, Self>) -> Result<(), Self::Error> {
+        // C and &C are different types, so make sure to convert.
+        let BufferPush {
             device,
             queue,
             vertex_buffer,
             current_texture,
             mask_texture,
             transform,
-            size,
-        )
+            viewport_size,
+            clip,
+        } = buffer_push;
+
+        (**self).push_buffers(BufferPush {
+            device,
+            queue,
+            vertex_buffer,
+            current_texture,
+            mask_texture,
+            transform,
+            viewport_size,
+            clip,
+        })
     }
 
     fn set_texture_interpolation(
@@ -224,29 +302,48 @@ impl<C: GpuContext + ?Sized> GpuContext for &mut C {
         (**self).set_texture_interpolation(device, texture, interpolation)
     }
 
-    fn write_subtexture(
-        &mut self,
-        device: &Self::Device,
-        queue: &Self::Queue,
-        texture: &Self::Texture,
-        offset: (u32, u32),
-        size: (u32, u32),
-        format: piet::ImageFormat,
-        data: &[u8],
-    ) {
-        (**self).write_subtexture(device, queue, texture, offset, size, format, data)
+    fn write_subtexture(&mut self, subtexture_write: SubtextureWrite<'_, Self>) {
+        // Convert type from &C to C
+        let SubtextureWrite {
+            device,
+            queue,
+            texture,
+            offset,
+            size,
+            format,
+            data,
+        } = subtexture_write;
+
+        (**self).write_subtexture(SubtextureWrite {
+            device,
+            queue,
+            texture,
+            offset,
+            size,
+            format,
+            data,
+        })
     }
 
-    fn write_texture(
-        &mut self,
-        device: &Self::Device,
-        queue: &Self::Queue,
-        texture: &Self::Texture,
-        size: (u32, u32),
-        format: piet::ImageFormat,
-        data: Option<&[u8]>,
-    ) {
-        (**self).write_texture(device, queue, texture, size, format, data)
+    fn write_texture(&mut self, texture_write: TextureWrite<'_, Self>) {
+        // Convert type from &C to C
+        let TextureWrite {
+            device,
+            queue,
+            texture,
+            size,
+            format,
+            data,
+        } = texture_write;
+
+        (**self).write_texture(TextureWrite {
+            device,
+            queue,
+            texture,
+            size,
+            format,
+            data,
+        })
     }
 
     fn write_vertices(

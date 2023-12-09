@@ -76,6 +76,11 @@ pub(crate) use resources::{Texture, VertexBuffer};
 
 const UV_WHITE: [f32; 2] = [0.5, 0.5];
 
+/// Structures that are useful for implementing the `GpuContext` type.
+pub mod gpu_types {
+    pub use crate::gpu_backend::{AreaCapture, BufferPush, SubtextureWrite, TextureWrite};
+}
+
 /// The source of the GPU renderer.
 pub struct Source<C: GpuContext + ?Sized> {
     /// A texture that consists of an endless repeating pattern of a single white pixel.
@@ -399,15 +404,16 @@ impl<'a, 'b, 'c, C: GpuContext + ?Sized> RenderContext<'a, 'b, 'c, C> {
         // Draw!
         self.source
             .context
-            .push_buffers(
-                self.device,
-                self.queue,
-                self.source.buffers.vbo.resource(),
-                texture.resource(),
-                mask_texture.resource(),
-                &transform,
-                self.size,
-            )
+            .push_buffers(gpu_types::BufferPush {
+                device: self.device,
+                queue: self.queue,
+                vertex_buffer: self.source.buffers.vbo.resource(),
+                current_texture: texture.resource(),
+                mask_texture: mask_texture.resource(),
+                transform: &transform,
+                viewport_size: self.size,
+                clip: None,
+            })
             .piet_err()?;
 
         // Clear the original buffers.
@@ -882,14 +888,14 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
         let size = (src_size.width as u32, src_size.height as u32);
         self.source
             .context
-            .capture_area(
-                self.device,
-                self.queue,
-                image.texture().resource(),
+            .capture_area(gpu_backend::AreaCapture {
+                device: self.device,
+                queue: self.queue,
+                texture: image.texture().resource(),
                 offset,
                 size,
-                self.bitmap_scale,
-            )
+                bitmap_scale: self.bitmap_scale,
+            })
             .piet_err()?;
 
         Ok(image)
