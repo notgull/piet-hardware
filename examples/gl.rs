@@ -605,6 +605,7 @@ impl piet_hardware::GpuContext for GlContext {
         let (r, g, b, a) = color.as_rgba();
 
         unsafe {
+            gl::Disable(gl::SCISSOR_TEST);
             gl::ClearColor(r as f32, g as f32, b as f32, a as f32);
             gl::Clear(gl::COLOR_BUFFER_BIT);
             gl_error();
@@ -977,6 +978,7 @@ impl piet_hardware::GpuContext for GlContext {
                 Some(Rect { x0, y0, x1, y1 }) => (x0, y0, x1 - x0, y1 - y0),
                 None => (0.0, 0.0, width as f64, height as f64),
             };
+            gl::Enable(gl::SCISSOR_TEST);
             gl::Scissor(sx as i32, sy as i32, s_width as i32, s_height as i32);
 
             // Set the transform.

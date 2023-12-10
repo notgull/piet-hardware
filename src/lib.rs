@@ -489,9 +489,18 @@ impl<'a, 'b, 'c, C: GpuContext + ?Sized> RenderContext<'a, 'b, 'c, C> {
 
         let mask = match &mut state.clip {
             ClipState::Mask(mask) => mask,
-            state => {
-                *state = ClipState::Mask(Mask::new(self.size.0, self.size.1));
-                state.as_mut().unwrap()
+            ClipState::SimpleRect(rect) => {
+                // Create a clip mask with the existing rectangle
+                let mut mask = Mask::new(self.size.0, self.size.1);
+                self.source
+                    .mask_context
+                    .add_path(&mut mask, *rect, self.tolerance);
+                state.clip = ClipState::Mask(mask);
+                state.clip.as_mut().unwrap()
+            }
+            clip @ ClipState::NoClip => {
+                *clip = ClipState::Mask(Mask::new(self.size.0, self.size.1));
+                clip.as_mut().unwrap()
             }
         };
 
