@@ -242,7 +242,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 num_frames = 0;
             }
 
-
             ctx.finish().unwrap();
             ctx.status()
         };
