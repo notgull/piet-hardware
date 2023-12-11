@@ -34,6 +34,8 @@ use glutin_winit::{DisplayBuilder, GlWindow};
 use piet::kurbo::{Affine, BezPath, Point, Rect};
 use piet::RenderContext as _;
 
+use piet_hardware::gpu_types::{AreaCapture, BufferPush, SubtextureWrite, TextureWrite};
+
 use raw_window_handle::HasRawWindowHandle;
 
 use winit::dpi::PhysicalSize;
@@ -46,7 +48,8 @@ use std::ffi::CString;
 use std::fmt;
 use std::mem;
 use std::num::NonZeroU32;
-use std::time::{Duration, Instant};
+
+use web_time::{Duration, Instant};
 
 const TEST_IMAGE: &[u8] = include_bytes!("test-image.png");
 
@@ -147,6 +150,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut outline = None;
     let mut image = None;
     let mut tick = 0;
+    let mut num_frames = 0;
+    let mut last_second = Instant::now();
 
     // Draw the window.
     let mut draw =
@@ -229,6 +234,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             tick += 1;
+
+            num_frames += 1;
+            if Instant::now().duration_since(last_second) >= Duration::from_secs(1) {
+                last_second = Instant::now();
+                println!("fps: {num_frames}");
+                num_frames = 0;
+            }
+
             ctx.finish().unwrap();
             ctx.status()
         };
@@ -592,6 +605,7 @@ impl piet_hardware::GpuContext for GlContext {
         let (r, g, b, a) = color.as_rgba();
 
         unsafe {
+            gl::Disable(gl::SCISSOR_TEST);
             gl::ClearColor(r as f32, g as f32, b as f32, a as f32);
             gl::Clear(gl::COLOR_BUFFER_BIT);
             gl_error();
@@ -653,12 +667,14 @@ impl piet_hardware::GpuContext for GlContext {
 
     fn write_texture(
         &mut self,
-        _device: &(),
-        _queue: &(),
-        texture: &Self::Texture,
-        size: (u32, u32),
-        format: piet::ImageFormat,
-        data: Option<&[u8]>,
+        TextureWrite {
+            device: (),
+            queue: (),
+            texture,
+            size,
+            format,
+            data,
+        }: TextureWrite<'_, Self>,
     ) {
         self.assert_context();
 
@@ -692,13 +708,15 @@ impl piet_hardware::GpuContext for GlContext {
 
     fn write_subtexture(
         &mut self,
-        _device: &(),
-        _queue: &(),
-        texture: &Self::Texture,
-        offset: (u32, u32),
-        size: (u32, u32),
-        format: piet::ImageFormat,
-        data: &[u8],
+        SubtextureWrite {
+            device: (),
+            queue: (),
+            texture,
+            offset,
+            size,
+            format,
+            data,
+        }: SubtextureWrite<'_, Self>,
     ) {
         self.assert_context();
 
@@ -758,12 +776,14 @@ impl piet_hardware::GpuContext for GlContext {
 
     fn capture_area(
         &mut self,
-        _device: &(),
-        _queue: &(),
-        texture: &Self::Texture,
-        offset: (u32, u32),
-        size: (u32, u32),
-        scale: f64,
+        AreaCapture {
+            device: (),
+            queue: (),
+            texture,
+            offset,
+            size,
+            bitmap_scale: scale,
+        }: AreaCapture<'_, Self>,
     ) -> Result<(), Self::Error> {
         // Use glReadPixels to read into the texture.
         self.assert_context();
@@ -806,15 +826,15 @@ impl piet_hardware::GpuContext for GlContext {
             }
 
             // Write the image to the texture.
-            self.write_subtexture(
-                &(),
-                &(),
+            self.write_subtexture(SubtextureWrite {
+                device: &(),
+                queue: &(),
                 texture,
                 offset,
                 size,
-                piet::ImageFormat::RgbaSeparate,
-                &buffer,
-            );
+                format: piet::ImageFormat::RgbaSeparate,
+                data: &buffer,
+            });
         }
 
         Ok(())
@@ -933,22 +953,33 @@ impl piet_hardware::GpuContext for GlContext {
 
     fn push_buffers(
         &mut self,
-        _device: &(),
-        _queue: &(),
-        vertex_buffer: &Self::VertexBuffer,
-        current_texture: &Self::Texture,
-        mask_texture: &Self::Texture,
-        transform: &Affine,
-        size: (u32, u32),
+        BufferPush {
+            device: (),
+            queue: (),
+            vertex_buffer,
+            current_texture,
+            mask_texture,
+            transform,
+            viewport_size,
+            clip,
+        }: BufferPush<'_, Self>,
     ) -> Result<(), Self::Error> {
         unsafe {
             // Use our program.
             gl::UseProgram(self.render_program);
 
             // Set the viewport size.
-            let (width, height) = size;
+            let (width, height) = viewport_size;
             gl::Viewport(0, 0, width as i32, height as i32);
             gl::Uniform2f(self.viewport_size, width as f32, height as f32);
+
+            // Set the scissor rect.
+            let (sx, sy, s_width, s_height) = match clip {
+                Some(Rect { x0, y0, x1, y1 }) => (x0, y0, x1 - x0, y1 - y0),
+                None => (0.0, 0.0, width as f64, height as f64),
+            };
+            gl::Enable(gl::SCISSOR_TEST);
+            gl::Scissor(sx as i32, sy as i32, s_width as i32, s_height as i32);
 
             // Set the transform.
             let [a, b, c, d, e, f] = transform.as_coeffs();

@@ -33,8 +33,10 @@ gl = "0.14.0"
 glutin = { version = "0.30.9", default-features = false, features = ["x11", "glx", "egl", "wayland", "wgl"] }
 glutin-winit = { version = "0.3.0", default-features = false, features = ["x11", "egl", "glx", "wgl"] }
 image = { version = "0.24.6", default-features = false, features = ["png"] }
+instant = "0.1.12"
 log = "0.4.19"
 raw-window-handle = { version = "0.5.2", default-features = false }
+web-time = "0.2.3"
 winit = { version = "0.28.6", default-features = false, features = ["wayland", "x11"] }
 
 [workspace]

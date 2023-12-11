@@ -76,6 +76,11 @@ pub(crate) use resources::{Texture, VertexBuffer};
 
 const UV_WHITE: [f32; 2] = [0.5, 0.5];
 
+/// Structures that are useful for implementing the `GpuContext` type.
+pub mod gpu_types {
+    pub use crate::gpu_backend::{AreaCapture, BufferPush, SubtextureWrite, TextureWrite};
+}
+
 /// The source of the GPU renderer.
 pub struct Source<C: GpuContext + ?Sized> {
     /// A texture that consists of an endless repeating pattern of a single white pixel.
@@ -253,15 +258,59 @@ struct RenderState<C: GpuContext + ?Sized> {
     /// The current transform in pixel space.
     transform: Affine,
 
-    /// The current clipping mask.
-    mask: Option<Mask<C>>,
+    /// The current clip.
+    clip: ClipState<C>,
 }
 
 impl<C: GpuContext + ?Sized> Default for RenderState<C> {
     fn default() -> Self {
         Self {
             transform: Affine::IDENTITY,
-            mask: None,
+            clip: ClipState::NoClip,
+        }
+    }
+}
+
+/// Current state for clipping.
+#[derive(Debug)]
+enum ClipState<C: GpuContext + ?Sized> {
+    /// There is no clip at all.
+    NoClip,
+
+    /// There is a simple rectangle to use for clips.
+    SimpleRect(Rect),
+
+    /// There is a more complicated texture mask.
+    Mask(Mask<C>),
+}
+
+impl<C: GpuContext + ?Sized> ClipState<C> {
+    /// Convert into an `Option<Mask>`
+    #[inline]
+    fn into_mask(self) -> Option<Mask<C>> {
+        match self {
+            Self::Mask(mask) => Some(mask),
+            _ => None,
+        }
+    }
+
+    /// Convert into an `Option<&mut Mask>`.
+    #[inline]
+    fn as_mut(&mut self) -> Option<&mut Mask<C>> {
+        match self {
+            Self::Mask(mask) => Some(mask),
+            _ => None,
+        }
+    }
+}
+
+impl<C: GpuContext + ?Sized> Clone for ClipState<C> {
+    #[inline]
+    fn clone(&self) -> Self {
+        match self {
+            Self::NoClip => Self::NoClip,
+            Self::SimpleRect(rect) => Self::SimpleRect(*rect),
+            Self::Mask(mask) => Self::Mask(mask.clone()),
         }
     }
 }
@@ -272,11 +321,11 @@ impl<C: GpuContext + ?Sized> Drop for RenderContext<'_, '_, '_, C> {
             TinyVec::Heap(h) => self
                 .source
                 .mask_context
-                .reclaim(h.drain(..).filter_map(|s| s.mask)),
+                .reclaim(h.drain(..).filter_map(|s| s.clip.into_mask())),
             TinyVec::Inline(i) => self
                 .source
                 .mask_context
-                .reclaim(i.drain(..).filter_map(|s| s.mask)),
+                .reclaim(i.drain(..).filter_map(|s| s.clip.into_mask())),
         }
 
         let mut state = mem::take(&mut self.state);
@@ -363,32 +412,35 @@ impl<'a, 'b, 'c, C: GpuContext + ?Sized> RenderContext<'a, 'b, 'c, C> {
         );
 
         // Decide which mask and transform to use.
-        let (transform, mask_texture, used_mask) = if self.ignore_state {
+        let (transform, mask_texture, clip_rect, used_mask) = if self.ignore_state {
             (
                 Affine::scale(self.bitmap_scale),
                 &self.source.white_pixel,
+                None,
                 false,
             )
         } else {
             let state = self.state.last_mut().unwrap();
 
-            let has_mask = state.mask.is_some();
-            let mask = state
-                .mask
-                .as_mut()
-                .map(|mask| {
+            let (has_mask, clip_rect, mask) = match &mut state.clip {
+                ClipState::NoClip => (false, None, &self.source.white_pixel),
+                ClipState::SimpleRect(rect) => (false, Some(*rect), &self.source.white_pixel),
+                ClipState::Mask(mask) => (
+                    true,
+                    None,
                     self.source.mask_context.texture(
                         mask,
                         &mut self.source.context,
                         self.device,
                         self.queue,
-                    )
-                })
-                .unwrap_or(&self.source.white_pixel);
+                    ),
+                ),
+            };
 
             (
                 Affine::scale(self.bitmap_scale) * state.transform,
                 mask,
+                clip_rect,
                 has_mask,
             )
         };
@@ -399,15 +451,16 @@ impl<'a, 'b, 'c, C: GpuContext + ?Sized> RenderContext<'a, 'b, 'c, C> {
         // Draw!
         self.source
             .context
-            .push_buffers(
-                self.device,
-                self.queue,
-                self.source.buffers.vbo.resource(),
-                texture.resource(),
-                mask_texture.resource(),
-                &transform,
-                self.size,
-            )
+            .push_buffers(gpu_types::BufferPush {
+                device: self.device,
+                queue: self.queue,
+                vertex_buffer: self.source.buffers.vbo.resource(),
+                current_texture: texture.resource(),
+                mask_texture: mask_texture.resource(),
+                transform: &transform,
+                viewport_size: self.size,
+                clip: clip_rect,
+            })
             .piet_err()?;
 
         // Clear the original buffers.
@@ -415,7 +468,7 @@ impl<'a, 'b, 'c, C: GpuContext + ?Sized> RenderContext<'a, 'b, 'c, C> {
 
         // Mark the mask as used so we don't overwrite it.
         if used_mask {
-            if let Some(mask) = &mut self.state.last_mut().unwrap().mask {
+            if let Some(mask) = &mut self.state.last_mut().unwrap().clip.as_mut() {
                 self.source.mask_context.mark_used(mask);
             }
         }
@@ -426,9 +479,30 @@ impl<'a, 'b, 'c, C: GpuContext + ?Sized> RenderContext<'a, 'b, 'c, C> {
     fn clip_impl(&mut self, shape: impl Shape) {
         let state = self.state.last_mut().unwrap();
 
-        let mask = state
-            .mask
-            .get_or_insert_with(|| Mask::new(self.size.0, self.size.1));
+        // If this shape is just a rectangle, use a simple scissor rect instead.
+        if let Some(rect) = shape.as_rect() {
+            if let ClipState::NoClip = &state.clip {
+                state.clip = ClipState::SimpleRect(rect);
+                return;
+            }
+        }
+
+        let mask = match &mut state.clip {
+            ClipState::Mask(mask) => mask,
+            ClipState::SimpleRect(rect) => {
+                // Create a clip mask with the existing rectangle
+                let mut mask = Mask::new(self.size.0, self.size.1);
+                self.source
+                    .mask_context
+                    .add_path(&mut mask, *rect, self.tolerance);
+                state.clip = ClipState::Mask(mask);
+                state.clip.as_mut().unwrap()
+            }
+            clip @ ClipState::NoClip => {
+                *clip = ClipState::Mask(Mask::new(self.size.0, self.size.1));
+                clip.as_mut().unwrap()
+            }
+        };
 
         self.source
             .mask_context
@@ -603,7 +677,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
     }
 
     fn clip(&mut self, shape: impl Shape) {
-        // If we have a bitmap scale, scale the image up.
+        // If we have a bitmap scale, scale the clip shape up.
         if (self.bitmap_scale - 1.0).abs() > 0.001 {
             let mut path = shape.into_path(self.tolerance);
             path.apply_affine(Affine::scale(self.bitmap_scale));
@@ -750,7 +824,7 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
         let last = self.state.last().unwrap();
         self.state.push(RenderState {
             transform: last.transform,
-            mask: last.mask.clone(),
+            clip: last.clip.clone(),
         });
         Ok(())
     }
@@ -761,9 +835,11 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
         }
 
         let mut state = self.state.pop().unwrap();
-        self.source
-            .mask_context
-            .reclaim(state.mask.take().into_iter());
+        self.source.mask_context.reclaim(
+            mem::replace(&mut state.clip, ClipState::NoClip)
+                .into_mask()
+                .into_iter(),
+        );
 
         Ok(())
     }
@@ -882,14 +958,14 @@ impl<C: GpuContext + ?Sized> piet::RenderContext for RenderContext<'_, '_, '_, C
         let size = (src_size.width as u32, src_size.height as u32);
         self.source
             .context
-            .capture_area(
-                self.device,
-                self.queue,
-                image.texture().resource(),
+            .capture_area(gpu_backend::AreaCapture {
+                device: self.device,
+                queue: self.queue,
+                texture: image.texture().resource(),
                 offset,
                 size,
-                self.bitmap_scale,
-            )
+                bitmap_scale: self.bitmap_scale,
+            })
             .piet_err()?;
 
         Ok(image)

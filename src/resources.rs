@@ -181,7 +181,14 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         format: piet::ImageFormat,
         data: Option<&[u8]>,
     ) {
-        context.write_texture(device, queue, self.resource(), size, format, data);
+        context.write_texture(crate::gpu_backend::TextureWrite {
+            device,
+            queue,
+            size,
+            format,
+            data,
+            texture: &self.resource,
+        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -195,7 +202,15 @@ impl<C: GpuContext + ?Sized> Texture<C> {
         format: piet::ImageFormat,
         data: &[u8],
     ) {
-        context.write_subtexture(device, queue, self.resource(), offset, size, format, data);
+        context.write_subtexture(crate::gpu_backend::SubtextureWrite {
+            device,
+            queue,
+            offset,
+            size,
+            format,
+            data,
+            texture: &self.resource,
+        });
     }
 
     pub(crate) fn set_interpolation(
