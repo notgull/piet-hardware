@@ -1,6 +1,6 @@
 [package]
 name = "piet-hardware"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 license = "LGPL-3.0-or-later OR MPL-2.0"
 rust-version = "1.66.0"

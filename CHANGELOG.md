@@ -3,6 +3,10 @@
 This log describes changes in the `piet-hardware`, `piet-glow` and `piet-wgpu`
 crates.
 
+## piet-hardware 0.5.1
+
+- Moved source code to `codeberg.org`
+
 ## piet-hardware 0.5.0
 
 - **Breaking:** Add support for using the hardware's scissor rect for optimizing
