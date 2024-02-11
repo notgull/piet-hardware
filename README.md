@@ -14,10 +14,10 @@ Metal, or other GPU APIs.
 
 ## Source Code
 
-The canonical code for this repository is kept on our [Git Forge]. For
+The canonical code for this repository is kept on [Codeberg]. For
 convenience, a mirror is kept on [GitHub].
 
-[Git Forge]: https://src.notgull.net/notgull/piet-hardware
+[Codeberg]: https://codeberg.org/notgull/piet-hardware
 [GitHub]: https://github.com/notgull/piet-hardware
 
 ## License
