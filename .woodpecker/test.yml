@@ -26,4 +26,4 @@ steps:
       RUSTFLAGS: "-D warnings"
       RUSTDOCFLAGS: "-D warnings"
       RUSTUP_MAX_RETRIES: "10"
-      PACKAGES: libx11-dev libxcb1-dev libxkbcommon-dev libx11-xcb-dev
+      PACKAGES: libx11-dev libxcb1-dev libxkbcommon-dev libx11-xcb-dev libwayland-dev pkg-config
